@@ -318,12 +318,29 @@ def save_corrected_samples(digits: list[np.ndarray], labels: str) -> Path:
     return root
 
 
-def save_expense(amount: str, category: str, csv_path: Path) -> Path:
+def save_expense(
+    amount: str, category: str, csv_path: Path, expense_date: str | None = None
+) -> Path:
     if not re.fullmatch(r"\d+(?:[.,]\d{1,2})?", amount):
         raise ValueError("Importe inválido. Usa números y, si corresponde, hasta dos decimales.")
     category = category.strip()
     if not category:
         raise ValueError("La categoría no puede estar vacía.")
+
+    normalized_date = date.today().isoformat()
+    if expense_date and expense_date.strip():
+        raw_date = expense_date.strip()
+        try:
+            normalized_date = date.fromisoformat(raw_date).isoformat()
+        except ValueError:
+            for date_format in ("%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+                try:
+                    normalized_date = datetime.strptime(raw_date, date_format).date().isoformat()
+                    break
+                except ValueError:
+                    continue
+            else:
+                raise ValueError("Fecha inválida. Usa AAAA-MM-DD o DD/MM/AAAA.")
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     new_file = not csv_path.exists() or csv_path.stat().st_size == 0
@@ -331,7 +348,7 @@ def save_expense(amount: str, category: str, csv_path: Path) -> Path:
         writer = csv.DictWriter(stream, fieldnames=["fecha", "importe", "categoria"])
         if new_file:
             writer.writeheader()
-        writer.writerow({"fecha": date.today().isoformat(), "importe": amount, "categoria": category})
+        writer.writerow({"fecha": normalized_date, "importe": amount, "categoria": category})
     return csv_path.resolve()
 
 
@@ -499,3 +516,4 @@ def select_pdf_digit_region(pdf_path: Path, page_count: int) -> np.ndarray:
 
 if __name__ == "__main__":
     main()
+

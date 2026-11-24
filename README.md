@@ -70,13 +70,19 @@ Las imágenes generadas y las instrucciones para mostrarlas frente a la cámara 
 
 ## Revisar un documento PDF
 
-Puedes pasar un PDF con texto seleccionable y el programa buscará importes junto a etiquetas como “total”, “importe”, “monto” y “a pagar”. Si encuentra varios, podrás elegir cuál revisar. En un PDF escaneado o sin importes legibles en la capa de texto, te pedirá elegir la página y marcar con el mouse la zona del importe. Al abrir una imagen también puedes indicar si es una boleta/recibo para marcar el total, o si contiene dígitos sueltos.
+Al abrir una imagen o un PDF, elige qué dato quieres buscar: total, monto/importe, precio unitario, fecha o dígitos sueltos. El programa busca primero la etiqueta elegida y solo lee el valor asociado o recorta su zona; no mezcla todos los números de la página. Si hay varios resultados, podrás seleccionar uno. Los importes manuscritos siguen siendo una propuesta del modelo: la ventana muestra el recorte para que compares y corrijas el valor antes de guardarlo. Si no encuentra la etiqueta, puedes marcar la zona a mano.
 
 ```powershell
 .\build\Release\expense_reader.exe "C:\ruta\a\tu_documento.pdf"
 ```
 
-Para escaneos y fotos de boletas, marca todos los dígitos del total y revisa el campo antes de guardarlo. La segmentación intenta quitar reglas horizontales del formulario; las cifras con confianza baja aparecen como `?` y debes corregirlas para poder guardar. El modelo reconoce dígitos individuales: no interpreta automáticamente la coma ni el punto decimal, y puede confundir escritura manuscrita. Corrige el importe manualmente si hace falta. El programa no decide por sí solo cuál de todos los números del documento es el total cuando no hay texto legible.
+Para que la búsqueda por etiqueta funcione en imágenes y PDF escaneados, instala Tesseract OCR una vez en Windows:
+
+```powershell
+winget install --id tesseract-ocr.tesseract --exact
+```
+
+El programa usa OCR para localizar etiquetas y valores impresos. Para cifras manuscritas usa el modelo de dígitos y muestra el recorte junto a su propuesta. Revisa el número y escribe manualmente la coma o el punto decimal antes de guardar; la confianza del modelo puede ser alta aunque una cifra manuscrita se confunda. La fecha detectada también se puede editar en la ventana de revisión.
 
 Para probar extracción multipágina, renderizado de escaneos y el flujo C++ completo con un PDF de demostración temporal:
 
@@ -98,3 +104,4 @@ Para analizar imágenes, cámara o recortes de PDF escaneados necesitas un model
 2. Mejorar la segmentación de cifras conectadas y el centrado de cada dígito.
 3. Mejorar la captura en distintas condiciones de luz y cámara.
 4. Comparar el Transformer con una CNN como línea base.
+

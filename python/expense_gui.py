@@ -6,6 +6,7 @@ import base64
 import csv
 import re
 import tkinter as tk
+from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -18,6 +19,7 @@ from expense_app import (
     predict_image,
     save_expense,
 )
+from document_search import DocumentFieldCandidate, search_image_fields, search_pdf_fields
 from pdf_support import AmountCandidate, extract_amount_candidates, render_pdf_page
 
 
@@ -74,7 +76,7 @@ class ExpenseReaderGUI:
         header.pack(fill="x")
         tk.Label(header, text="Registro de gastos", bg=NAVY, fg=WHITE,
                  font=("Segoe UI", 24, "bold")).pack(anchor="w")
-        tk.Label(header, text="Elige cómo quieres revisar el importe", bg=NAVY, fg="#d4deeb",
+        tk.Label(header, text="Busca datos en documentos o consulta tus gastos", bg=NAVY, fg="#d4deeb",
                  font=("Segoe UI", 11)).pack(anchor="w", pady=(5, 0))
 
         ttk.Label(shell, text="Menú principal", style="Section.TLabel").pack(anchor="w", pady=(22, 12))
@@ -85,9 +87,9 @@ class ExpenseReaderGUI:
             cards.grid_rowconfigure(index, weight=1, uniform="cards")
 
         options = [
-            ("Revisar documento PDF", "Busca importes en el texto o selecciona la zona en un escaneo.",
+            ("Revisar documento PDF", "Busca total, importe, precio o fecha dentro del documento.",
              "Elegir PDF", self.review_pdf, BLUE),
-            ("Abrir imagen", "Lee dígitos sueltos o marca el total de una boleta.",
+            ("Abrir imagen", "Busca total, importe, precio o fecha en una boleta.",
              "Elegir imagen", self.review_image, GREEN),
             ("Usar cámara", "Captura los dígitos dentro del recuadro de la cámara.",
              "Iniciar cámara", self.review_camera, "#7c4ac7"),
@@ -144,6 +146,106 @@ class ExpenseReaderGUI:
             self.model, self.device = load_model(self.model_path)
         return self.model, self.device
 
+    def _choose_document_field(self) -> str:
+        options = {
+            "Total / total a pagar": "total",
+            "Monto o importe": "monto",
+            "Precio unitario": "precio",
+            "Fecha": "fecha",
+            "Dígitos sueltos": "digits",
+        }
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Qué dato buscar")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        dialog.configure(bg=BACKGROUND)
+        tk.Label(dialog, text="Elige qué campo localizar", bg=BACKGROUND, fg=TEXT,
+                 font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=18, pady=(16, 4))
+        tk.Label(
+            dialog,
+            text="Buscaré la etiqueta elegida y revisaré solo el valor cercano. Podrás corregirlo.",
+            bg=BACKGROUND, fg=MUTED, font=("Segoe UI", 10),
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+        field_var = tk.StringVar(value=next(iter(options)))
+        selector = ttk.Combobox(
+            dialog, textvariable=field_var, values=tuple(options), state="readonly", width=34
+        )
+        selector.pack(fill="x", padx=18)
+        result: list[str] = []
+
+        def accept(_event=None) -> None:
+            value = field_var.get()
+            if value in options:
+                result.append(options[value])
+                dialog.destroy()
+
+        buttons = tk.Frame(dialog, bg=BACKGROUND)
+        buttons.pack(fill="x", padx=18, pady=16)
+        tk.Button(buttons, text="Buscar", command=accept, bg=GREEN, fg=WHITE,
+                  relief="flat", padx=14, pady=8, font=("Segoe UI", 10, "bold")).pack(side="right")
+        tk.Button(buttons, text="Cancelar", command=dialog.destroy, bg="#e7ebf0", fg=TEXT,
+                  relief="flat", padx=14, pady=8, font=("Segoe UI", 10)).pack(side="right", padx=(0, 8))
+        selector.bind("<Return>", accept)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        selector.focus_set()
+        self.root.wait_window(dialog)
+        if not result:
+            raise CancelAction
+        return result[0]
+
+    def _choose_document_candidate(
+        self, candidates: list[DocumentFieldCandidate]
+    ) -> DocumentFieldCandidate:
+        if len(candidates) == 1:
+            return candidates[0]
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Elige el campo detectado")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.geometry("660x390")
+        dialog.configure(bg=BACKGROUND)
+        result: list[DocumentFieldCandidate] = []
+        tk.Label(dialog, text="Campos encontrados", bg=BACKGROUND, fg=TEXT,
+                 font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=18, pady=(16, 4))
+        tk.Label(dialog, text="Selecciona el valor que quieras revisar.", bg=BACKGROUND,
+                 fg=MUTED, font=("Segoe UI", 10)).pack(anchor="w", padx=18, pady=(0, 12))
+        listing = tk.Listbox(dialog, font=("Segoe UI", 10), height=10, activestyle="dotbox")
+        listing.pack(fill="both", expand=True, padx=18)
+        for candidate in candidates:
+            value = candidate.value if candidate.value is not None else "leer cifra junto a etiqueta"
+            listing.insert(
+                "end",
+                f"Pág. {candidate.page_number} · {candidate.label}: {value} · "
+                f"{candidate.confidence:.0%} OCR",
+            )
+        listing.selection_set(0)
+
+        def choose(_event=None) -> None:
+            selection = listing.curselection()
+            if selection:
+                result.append(candidates[selection[0]])
+                dialog.destroy()
+
+        actions = tk.Frame(dialog, bg=BACKGROUND)
+        actions.pack(fill="x", padx=18, pady=14)
+        tk.Button(actions, text="Usar selección", command=choose, bg=BLUE, fg=WHITE,
+                  relief="flat", padx=14, pady=8, font=("Segoe UI", 10, "bold")).pack(side="right")
+        tk.Button(actions, text="Cancelar", command=dialog.destroy, bg="#e7ebf0", fg=TEXT,
+                  relief="flat", padx=14, pady=8, font=("Segoe UI", 10)).pack(side="right", padx=(0, 8))
+        listing.bind("<Double-Button-1>", choose)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        self.root.wait_window(dialog)
+        if not result:
+            raise CancelAction
+        return result[0]
+
+    @staticmethod
+    def _best_scanned_date(candidates: list[DocumentFieldCandidate]) -> str | None:
+        dates = [item for item in candidates if item.field == "fecha" and item.value]
+        dates.sort(key=lambda item: (-item.score, item.page_number))
+        return dates[0].value if dates else None
+
     def review_image(self) -> None:
         path = filedialog.askopenfilename(
             parent=self.root,
@@ -155,21 +257,67 @@ class ExpenseReaderGUI:
         image = cv2.imread(path, cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError("No se pudo abrir esa imagen.")
-        document_image = messagebox.askyesnocancel(
-            "Tipo de imagen",
-            "¿Es una boleta, recibo o documento?\n\n"
-            "Sí: marcarás la zona del total.\n"
-            "No: se analizará toda la imagen como dígitos sueltos.\n"
-            "Cancelar: volver al menú.",
-            parent=self.root,
-        )
-        if document_image is None:
-            raise CancelAction
-        if document_image:
-            region = self._select_region(image, f"Imagen: {Path(path).name}")
-            self._review_vision(region, Path(path).name, adaptive=False, document=True)
-        else:
+        field = self._choose_document_field()
+        if field == "digits":
             self._review_vision(image, Path(path).name, adaptive=False)
+            return
+
+        candidates = search_image_fields(image, field)
+        matches = [candidate for candidate in candidates if candidate.field == field]
+        if not matches:
+            if field == "fecha":
+                self._show_review(
+                    "", Path(path).name, [],
+                    "No encontré una etiqueta FECHA legible. Escribe la fecha del documento y el importe.",
+                    date_required=True, preview_image=image,
+                )
+                return
+            if not messagebox.askyesno(
+                "No encontré la etiqueta",
+                "No encontré el campo elegido. ¿Quieres marcar manualmente la zona del importe?",
+                parent=self.root,
+            ):
+                return
+            region = self._select_region(image, f"Imagen: {Path(path).name}")
+            expense_date = self._best_scanned_date(candidates)
+            self._review_vision(
+                region, Path(path).name, adaptive=False, document=True, expense_date=expense_date
+            )
+            return
+
+        candidate = self._choose_document_candidate(matches)
+        expense_date = candidate.value if field == "fecha" else self._best_scanned_date(candidates)
+        if candidate.bounds:
+            x0, y0, x1, y1 = candidate.bounds
+            region = image[y0:y1, x0:x1].copy()
+            self._review_vision(
+                region, Path(path).name, adaptive=False, document=True, expense_date=expense_date
+            )
+            return
+        if candidate.value is None:
+            if field == "fecha":
+                self._show_review(
+                    "", Path(path).name, [],
+                    f"Encontré «{candidate.label}», pero no pude leer la fecha. Escríbela junto con el importe.",
+                    date_required=True, preview_image=image,
+                )
+                return
+            messagebox.showwarning(
+                "No pude leer el campo",
+                f"Encontré la etiqueta «{candidate.label}», pero no pude leer su valor. Prueba con mejor enfoque.",
+                parent=self.root,
+            )
+            return
+
+        if field == "fecha":
+            detail = f"Fecha localizada junto a la etiqueta «{candidate.label}»: {candidate.value}. Escribe el importe para registrar el gasto."
+            amount = ""
+        else:
+            detail = f"Valor localizado junto a «{candidate.label}»: {candidate.value}. Revisa que corresponda al campo elegido."
+            amount = candidate.value
+        self._show_review(
+            amount, Path(path).name, [], detail, expense_date=expense_date
+        )
 
     def review_camera(self) -> None:
         image = capture_from_camera()
@@ -187,16 +335,79 @@ class ExpenseReaderGUI:
             raise CancelAction
 
         pdf_path = Path(path)
-        page_count, candidates = extract_amount_candidates(pdf_path)
-        if candidates:
-            chosen = self._choose_pdf_candidate(candidates)
-            detail = f"Página {chosen.page_number}: {chosen.context}"
-            self._show_review(chosen.amount, pdf_path.name, [], detail)
+        field = self._choose_document_field()
+        if field == "digits":
+            page_count, amount_candidates = extract_amount_candidates(pdf_path)
+            if amount_candidates:
+                chosen = self._choose_pdf_candidate(amount_candidates)
+                detail = f"Página {chosen.page_number}: {chosen.context}"
+                self._show_review(chosen.amount, pdf_path.name, [], detail)
+                return
+            self._review_pdf_region(pdf_path, page_count)
             return
 
+        page_count, candidates = search_pdf_fields(pdf_path, field)
+        matches = [candidate for candidate in candidates if candidate.field == field]
+        expense_date = self._best_scanned_date(candidates)
+        if not matches:
+            if field == "fecha":
+                first_page = render_pdf_page(pdf_path, 0)
+                self._show_review(
+                    "", pdf_path.name, [],
+                    "No encontré una etiqueta FECHA legible. Escribe la fecha del documento y el importe.",
+                    date_required=True, preview_image=first_page,
+                )
+                return
+            if not messagebox.askyesno(
+                "No encontré la etiqueta",
+                "No encontré el campo elegido. ¿Quieres marcar manualmente la zona del importe?",
+                parent=self.root,
+            ):
+                return
+            self._review_pdf_region(pdf_path, page_count, expense_date)
+            return
+
+        candidate = self._choose_document_candidate(matches)
+        if field == "fecha":
+            expense_date = candidate.value
+        if candidate.bounds:
+            page = render_pdf_page(pdf_path, candidate.page_number - 1)
+            x0, y0, x1, y1 = candidate.bounds
+            region = page[y0:y1, x0:x1].copy()
+            self._review_vision(
+                region, f"{pdf_path.name} · página {candidate.page_number}",
+                adaptive=False, document=True, expense_date=expense_date,
+            )
+            return
+        if candidate.value is None:
+            if field == "fecha":
+                page = render_pdf_page(pdf_path, candidate.page_number - 1)
+                self._show_review(
+                    "", pdf_path.name, [],
+                    f"Encontré «{candidate.label}» en la página {candidate.page_number}, pero no pude leer la fecha. Escríbela junto con el importe.",
+                    date_required=True, preview_image=page,
+                )
+                return
+            messagebox.showwarning(
+                "No pude leer el campo",
+                f"Encontré la etiqueta «{candidate.label}», pero no pude leer su valor.",
+                parent=self.root,
+            )
+            return
+        if field == "fecha":
+            amount = ""
+            detail = f"Fecha localizada en página {candidate.page_number}, junto a «{candidate.label}»: {candidate.value}. Escribe el importe para registrar el gasto."
+        else:
+            amount = candidate.value
+            detail = f"Página {candidate.page_number}. Valor junto a «{candidate.label}»: {candidate.value}. Revisa que corresponda al campo elegido."
+        self._show_review(amount, pdf_path.name, [], detail, expense_date=expense_date)
+
+    def _review_pdf_region(
+        self, pdf_path: Path, page_count: int, expense_date: str | None = None
+    ) -> None:
         messagebox.showinfo(
-            "PDF escaneado",
-            "No encontré un importe en el texto del documento. Elige una página y marca solo los dígitos del importe.",
+            "Selección manual",
+            "Marca todos los dígitos del importe para leerlos sin usar otros números del PDF.",
             parent=self.root,
         )
         page_number = simpledialog.askinteger(
@@ -208,7 +419,8 @@ class ExpenseReaderGUI:
         page = render_pdf_page(pdf_path, page_number - 1)
         region = self._select_region(page, f"PDF: página {page_number}")
         self._review_vision(
-            region, f"{pdf_path.name} · página {page_number}", adaptive=False, document=True
+            region, f"{pdf_path.name} · página {page_number}", adaptive=False,
+            document=True, expense_date=expense_date,
         )
 
     def _choose_pdf_candidate(self, candidates: list[AmountCandidate]) -> AmountCandidate:
@@ -258,10 +470,10 @@ class ExpenseReaderGUI:
     def _select_region(self, image: np.ndarray, label: str) -> np.ndarray:
         scale = min(1.0, 980 / image.shape[1], 650 / image.shape[0])
         display = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else image
-        ok, encoded = cv2.imencode(".ppm", cv2.cvtColor(display, cv2.COLOR_BGR2RGB))
+        ok, encoded = cv2.imencode(".png", cv2.cvtColor(display, cv2.COLOR_BGR2RGB))
         if not ok:
             raise RuntimeError("No se pudo mostrar la página del PDF.")
-        photo = tk.PhotoImage(data=base64.b64encode(encoded.tobytes()).decode("ascii"), format="PPM")
+        photo = tk.PhotoImage(data=base64.b64encode(encoded.tobytes()).decode("ascii"), format="PNG")
 
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Seleccionar importe — {label}")
@@ -333,7 +545,8 @@ class ExpenseReaderGUI:
         return result[0]
 
     def _review_vision(
-        self, image: np.ndarray, source: str, adaptive: bool, document: bool = False
+        self, image: np.ndarray, source: str, adaptive: bool, document: bool = False,
+        expense_date: str | None = None,
     ) -> None:
         model, device = self._load_model()
         try:
@@ -361,12 +574,18 @@ class ExpenseReaderGUI:
                 if document:
                     detail += " El signo '?' marca los dígitos dudosos."
         if document:
-            detail += " Confirma todos los dígitos y agrega la coma o el punto decimal manualmente."
-        self._show_review(amount, source, rows, detail)
+            detail += " Es una propuesta: compara cada dígito con el recorte antes de guardarlo y agrega la coma o el punto decimal manualmente."
+        self._show_review(
+            amount, source, rows, detail, expense_date=expense_date, preview_image=image
+        )
 
-    def _show_review(self, amount: str, source: str, digit_rows: list[tuple[str, str, str]], detail: str) -> None:
+    def _show_review(
+        self, amount: str, source: str, digit_rows: list[tuple[str, str, str]],
+        detail: str, expense_date: str | None = None, preview_image: np.ndarray | None = None,
+        date_required: bool = False,
+    ) -> None:
         dialog = tk.Toplevel(self.root)
-        dialog.title("Revisar importe")
+        dialog.title("Revisar gasto")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
@@ -375,6 +594,23 @@ class ExpenseReaderGUI:
                  font=("Segoe UI", 17, "bold")).pack(anchor="w", padx=22, pady=(18, 3))
         tk.Label(dialog, text=source, bg=BACKGROUND, fg=MUTED,
                  font=("Segoe UI", 9)).pack(anchor="w", padx=22, pady=(0, 8))
+        if preview_image is not None and preview_image.size:
+            preview_scale = min(
+                3.0, 460 / preview_image.shape[1], 140 / preview_image.shape[0]
+            )
+            preview = cv2.resize(
+                preview_image, None, fx=preview_scale, fy=preview_scale,
+                interpolation=cv2.INTER_CUBIC if preview_scale > 1 else cv2.INTER_AREA,
+            )
+            preview_rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB) if preview.ndim == 3 else preview
+            ok, encoded = cv2.imencode(".png", preview_rgb)
+            if ok:
+                preview_photo = tk.PhotoImage(
+                    data=base64.b64encode(encoded.tobytes()).decode("ascii"), format="PNG"
+                )
+                preview_label = tk.Label(dialog, image=preview_photo, bg=WHITE)
+                preview_label.image = preview_photo
+                preview_label.pack(anchor="w", padx=22, pady=(0, 10))
         tk.Label(dialog, text=detail, bg=BACKGROUND, fg=MUTED,
                  font=("Segoe UI", 10), wraplength=490, justify="left").pack(anchor="w", padx=22, pady=(0, 12))
 
@@ -400,13 +636,20 @@ class ExpenseReaderGUI:
         amount_var = tk.StringVar(value=amount)
         amount_entry = ttk.Entry(form, textvariable=amount_var, width=28, font=("Segoe UI", 12))
         amount_entry.grid(row=0, column=1, sticky="ew", padx=(14, 0), pady=5)
-        tk.Label(form, text="Categoría", bg=BACKGROUND, fg=TEXT,
+        tk.Label(form, text="Fecha (AAAA-MM-DD)", bg=BACKGROUND, fg=TEXT,
                  font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=5)
+        date_var = tk.StringVar(
+            value="" if date_required else expense_date or date.today().isoformat()
+        )
+        date_entry = ttk.Entry(form, textvariable=date_var, width=28, font=("Segoe UI", 11))
+        date_entry.grid(row=1, column=1, sticky="ew", padx=(14, 0), pady=5)
+        tk.Label(form, text="Categoría", bg=BACKGROUND, fg=TEXT,
+                 font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=5)
         category_var = tk.StringVar(value="comida")
         category_box = ttk.Combobox(form, textvariable=category_var,
                                     values=("comida", "transporte", "hogar", "otros"),
                                     state="normal", width=25)
-        category_box.grid(row=1, column=1, sticky="ew", padx=(14, 0), pady=5)
+        category_box.grid(row=2, column=1, sticky="ew", padx=(14, 0), pady=5)
         form.grid_columnconfigure(1, weight=1)
 
         buttons = tk.Frame(dialog, bg=BACKGROUND)
@@ -414,7 +657,12 @@ class ExpenseReaderGUI:
 
         def save() -> None:
             try:
-                saved_path = save_expense(amount_var.get().strip(), category_var.get(), self.csv_path)
+                if date_required and not date_var.get().strip():
+                    raise ValueError("Escribe la fecha del documento antes de guardarlo.")
+                saved_path = save_expense(
+                    amount_var.get().strip(), category_var.get(), self.csv_path,
+                    date_var.get().strip(),
+                )
             except ValueError as exc:
                 messagebox.showerror("Revisa los datos", str(exc), parent=dialog)
                 return
@@ -479,3 +727,4 @@ def run_gui(model_path: Path, csv_path: Path) -> None:
     root = tk.Tk()
     ExpenseReaderGUI(root, model_path, csv_path)
     root.mainloop()
+
