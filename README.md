@@ -90,7 +90,7 @@ Para probar extracción multipágina, renderizado de escaneos y el flujo C++ com
 .\.venv\Scripts\python.exe .\python\validate_pdf_support.py
 ```
 
-Para leer una etiqueta con la cámara, acerca el producto y encuadra el precio junto con su símbolo o palabra (“Precio”) dentro del rectángulo. El OCR ignora las palabras al proponer el número; si hay varios números, podrás elegir. Si solo encuentra texto, pregunta antes de pasar al modo de dígitos manuscritos. Pulsa Espacio para capturar o Esc para cancelar:
+La cámara muestra en vivo si el OCR interpreta lo encuadrado como fecha, precio, otro número o solo texto. Para guardar una fecha, encuádrela completa; al capturar, pasa al campo de fecha y podrás añadir el importe del gasto. Para un precio, acerca la etiqueta y encuadra el precio con su símbolo o palabra (“Precio”); el OCR ignora las palabras al proponer el número. Pulsa Espacio para capturar o Esc para cancelar:
 
 ```powershell
 .\build\Release\expense_reader.exe --camera

@@ -22,7 +22,7 @@ from expense_app import (
 from document_search import (
     CameraNumberCandidate,
     DocumentFieldCandidate,
-    extract_camera_numeric_candidates,
+    scan_camera_frame,
     search_image_fields,
     search_pdf_fields,
 )
@@ -97,7 +97,7 @@ class ExpenseReaderGUI:
              "Elegir PDF", self.review_pdf, BLUE),
             ("Abrir imagen", "Busca total, importe, precio o fecha en una boleta.",
              "Elegir imagen", self.review_image, GREEN),
-            ("Usar cámara", "Captura los dígitos dentro del recuadro de la cámara.",
+            ("Usar cámara", "Detecta en vivo si muestras una fecha, un precio u otro número.",
              "Iniciar cámara", self.review_camera, "#7c4ac7"),
             ("Ver gastos guardados", "Consulta los importes y categorías registrados en el CSV.",
              "Abrir historial", self.show_history, "#c16a20"),
@@ -330,7 +330,7 @@ class ExpenseReaderGUI:
         if image is None:
             raise CancelAction
         try:
-            scan = extract_camera_numeric_candidates(image)
+            scan = scan_camera_frame(image)
         except RuntimeError as exc:
             messagebox.showwarning(
                 "OCR no disponible",
@@ -338,6 +338,20 @@ class ExpenseReaderGUI:
                 parent=self.root,
             )
             self._review_vision(image, "Captura de cámara", adaptive=True)
+            return
+
+        if scan.kind == "fecha" and scan.value:
+            price_candidates = [candidate for candidate in scan.candidates if candidate.price_cued]
+            amount = self._choose_camera_number(price_candidates).value if price_candidates else ""
+            detail = f"Fecha detectada: {scan.display.removeprefix('FECHA: ')} ({scan.value})."
+            detail += (
+                f" Precio sugerido: {amount}. Confírmalo antes de guardar."
+                if amount else " Escribe el importe relacionado para guardar el gasto."
+            )
+            self._show_review(
+                amount, "Captura de cámara", [], detail,
+                expense_date=scan.value, preview_image=image,
+            )
             return
 
         if scan.candidates:

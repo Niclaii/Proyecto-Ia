@@ -9,12 +9,13 @@ import sys
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
+from threading import Event, Lock, Thread
 
 import cv2
 import numpy as np
 import torch
 
-from document_search import extract_camera_numeric_candidates
+from document_search import scan_camera_frame
 from train import DigitVisionTransformer
 
 for stream in (sys.stdout, sys.stderr):
@@ -280,6 +281,32 @@ def capture_from_camera() -> np.ndarray | None:
         raise RuntimeError("No se pudo abrir la cámara. Revisa el permiso y que esté conectada.")
 
     captured = None
+    stop_recognition = Event()
+    recognition_lock = Lock()
+    recognition_state: dict[str, object] = {
+        "frame": None,
+        "result": None,
+        "error": None,
+    }
+
+    def recognize_frames() -> None:
+        while not stop_recognition.is_set():
+            with recognition_lock:
+                frame_to_scan = recognition_state["frame"]
+            if frame_to_scan is not None:
+                try:
+                    result = scan_camera_frame(frame_to_scan)
+                except Exception as exc:
+                    with recognition_lock:
+                        recognition_state["error"] = str(exc)
+                else:
+                    with recognition_lock:
+                        recognition_state["result"] = result
+                        recognition_state["error"] = None
+            stop_recognition.wait(0.65)
+
+    recognition_thread = Thread(target=recognize_frames, name="camera-ocr", daemon=True)
+    recognition_thread.start()
     try:
         while True:
             ok, frame = camera.read()
@@ -289,12 +316,27 @@ def capture_from_camera() -> np.ndarray | None:
             roi_width, roi_height = int(width * 0.48), int(height * 0.36)
             left, top = int(width * 0.30), int(height * 0.34)
             right, bottom = left + roi_width, top + roi_height
+            roi = frame[top:bottom, left:right].copy()
+            with recognition_lock:
+                recognition_state["frame"] = roi
+                result = recognition_state["result"]
+                error = recognition_state["error"]
             preview = frame.copy()
             cv2.rectangle(preview, (left, top), (right, bottom), (0, 220, 80), 2)
-            cv2.putText(preview, "Acerca la etiqueta y centra el precio en el recuadro", (20, 35),
+            cv2.putText(preview, "Muestra una fecha o precio dentro del recuadro", (20, 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 80), 2)
             cv2.putText(preview, "ESPACIO: capturar   ESC: cancelar", (20, 65),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 80), 2)
+            if result is not None:
+                status = result.display
+                if result.confidence:
+                    status += f" ({result.confidence:.0%})"
+            elif error:
+                status = "OCR no disponible"
+            else:
+                status = "Analizando..."
+            cv2.putText(preview, status, (20, 100),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 80), 2)
             cv2.imshow("Registro de gastos - camara en vivo", preview)
             key = cv2.waitKey(1) & 0xFF
             if key == 32:
@@ -303,7 +345,9 @@ def capture_from_camera() -> np.ndarray | None:
             if key == 27:
                 break
     finally:
+        stop_recognition.set()
         camera.release()
+        recognition_thread.join(timeout=1.0)
         cv2.destroyAllWindows()
     return captured
 
@@ -379,6 +423,7 @@ def main() -> None:
         parser.error("Indica una imagen/PDF o usa --camera")
 
     amount: str | None = None
+    expense_date: str | None = None
     digit_images: list[np.ndarray] = []
     colors: list[str] = []
     vision_image: np.ndarray | None = None
@@ -390,11 +435,29 @@ def main() -> None:
             print("Captura cancelada.")
             return
         try:
-            camera_scan = extract_camera_numeric_candidates(vision_image)
+            camera_scan = scan_camera_frame(vision_image)
         except RuntimeError as exc:
             print(f"OCR no disponible; usaré el modo de dígitos manuscritos: {exc}")
         else:
-            if camera_scan.candidates:
+            if camera_scan.kind == "fecha" and camera_scan.value:
+                expense_date = camera_scan.value
+                print(f"Fecha detectada: {camera_scan.display.removeprefix('FECHA: ')} ({expense_date}).")
+                price_candidates = [candidate for candidate in camera_scan.candidates if candidate.price_cued]
+                if price_candidates:
+                    print("Posibles importes relacionados: " + ", ".join(
+                        f"[{index}] {candidate.value}" for index, candidate in enumerate(price_candidates, 1)
+                    ))
+                    selection = input("Elige el importe (Enter para [1]): ").strip()
+                    try:
+                        selected_index = int(selection) - 1 if selection else 0
+                        if selected_index < 0 or selected_index >= len(price_candidates):
+                            raise ValueError
+                    except ValueError as exc:
+                        raise ValueError("Selección numérica no válida.") from exc
+                    amount = price_candidates[selected_index].value
+                else:
+                    amount = input("Escribe el importe de este gasto: ").strip()
+            elif camera_scan.candidates:
                 print("Números detectados (se ignoraron las palabras):")
                 for index, candidate in enumerate(camera_scan.candidates, start=1):
                     cue = "precio probable" if candidate.price_cued else "otro número"
@@ -479,7 +542,7 @@ def main() -> None:
             print(f"Ejemplos personales guardados en {sample_dir.resolve()}")
 
     category = input("Categoría (comida/transporte/hogar/otros): ").strip()
-    saved_path = save_expense(amount, category, args.csv)
+    saved_path = save_expense(amount, category, args.csv, expense_date)
     print(f"Gasto guardado en {saved_path}")
 
 

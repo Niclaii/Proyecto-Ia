@@ -42,6 +42,7 @@ PRICE_CUE_RE = re.compile(
     r"(?i)\b(?:precio|price|unitario|unit|importe|monto|total|cost|oferta|sale)\b"
 )
 CURRENCY_CUE_RE = re.compile(r"(?i)(?:\bS\s*/|\bPEN\b|\bUSD\b|US\$|[$€£])")
+DATE_CUE_RE = re.compile(r"(?i)\b(?:fecha|date|emision|issued)\b")
 OCR_CORRECTIONS = {
     "torat": "total",
     "toral": "total",
@@ -93,6 +94,16 @@ class CameraNumberCandidate:
 
 @dataclass(frozen=True)
 class CameraNumberScan:
+    candidates: list[CameraNumberCandidate]
+    has_alphabetic_text: bool
+
+
+@dataclass(frozen=True)
+class CameraFrameScan:
+    kind: str
+    value: str | None
+    display: str
+    confidence: float
     candidates: list[CameraNumberCandidate]
     has_alphabetic_text: bool
 
@@ -492,8 +503,8 @@ def search_pdf_fields(pdf_path: Path, target_field: str) -> tuple[int, list[Docu
     return page_count, candidates
 
 
-def extract_camera_numeric_candidates(image: np.ndarray) -> CameraNumberScan:
-    """Read numeric tokens only, ranking amounts next to price/currency cues first."""
+def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
+    """Identify a date, a likely price, or numeric-only text in one camera frame."""
     words = _ocr_words(image)
     lines = _group_lines(words)
     has_alphabetic_text = any(
@@ -537,10 +548,44 @@ def extract_camera_numeric_candidates(image: np.ndarray) -> CameraNumberScan:
         if value not in best_by_value:
             best_by_value[value] = CameraNumberCandidate(value, 0.0, 100.0, True)
 
-    return CameraNumberScan(
-        sorted(
-            best_by_value.values(), key=lambda item: (-item.score, -item.confidence, item.value)
-        ),
-        has_alphabetic_text,
+    candidates = sorted(
+        best_by_value.values(), key=lambda item: (-item.score, -item.confidence, item.value)
     )
+    dates = []
+    for line in lines:
+        line_text = str(line["text"])
+        date_cued = bool(DATE_CUE_RE.search(line_text))
+        for value, raw in _parse_dates(line_text):
+            score = (50 if date_cued else 0) + float(line["confidence"])
+            dates.append((score, value, raw, float(line["confidence"])))
+    if dates:
+        _score, value, raw, confidence = max(dates, key=lambda item: item[0])
+        return CameraFrameScan(
+            "fecha", value, f"FECHA: {raw}", confidence, candidates, has_alphabetic_text
+        )
+    if candidates and candidates[0].price_cued:
+        candidate = candidates[0]
+        return CameraFrameScan(
+            "precio", candidate.value, f"PRECIO: {candidate.value}",
+            candidate.confidence, candidates, has_alphabetic_text,
+        )
+    if candidates:
+        candidate = candidates[0]
+        return CameraFrameScan(
+            "numero", candidate.value, f"NUMERO: {candidate.value}",
+            candidate.confidence, candidates, has_alphabetic_text,
+        )
+    if has_alphabetic_text:
+        return CameraFrameScan(
+            "texto", None, "TEXTO DETECTADO; SIN NUMEROS", 0.0, [], True
+        )
+    return CameraFrameScan(
+        "buscando", None, "BUSCANDO FECHA O PRECIO", 0.0, [], False
+    )
+
+
+def extract_camera_numeric_candidates(image: np.ndarray) -> CameraNumberScan:
+    """Compatibility helper that returns only numeric OCR candidates."""
+    scan = scan_camera_frame(image)
+    return CameraNumberScan(scan.candidates, scan.has_alphabetic_text)
 
