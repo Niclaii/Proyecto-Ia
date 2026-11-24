@@ -651,6 +651,7 @@ class ExpenseReaderGUI:
         model, device = self._load_model()
         decimal_detected = False
         decimal_index: int | None = None
+        confidence_threshold = 0.75 if document else 0.55
         try:
             digits, colors, predictions, confidences = predict_image(
                 image, model, device, adaptive, document=document
@@ -663,7 +664,7 @@ class ExpenseReaderGUI:
             detail = "No pude separar los dígitos de esta zona. Escribe el total completo antes de guardarlo."
         else:
             amount = "".join(
-                "?" if document and float(confidence) < 0.55 else str(int(digit))
+                "?" if document and float(confidence) < confidence_threshold else str(int(digit))
                 for digit, confidence in zip(predictions, confidences)
             )
             decimal_index = detect_decimal_separator(image, adaptive=adaptive)
@@ -680,7 +681,7 @@ class ExpenseReaderGUI:
                 for digit, color, confidence in zip(predictions, colors, confidences)
             ]
             detail = f"El modelo detectó {len(digits)} dígito(s)."
-            if float(confidences.min()) < 0.55:
+            if float(confidences.min()) < confidence_threshold:
                 detail += " Hay una confianza baja; revisa el importe antes de guardarlo."
                 if document:
                     detail += " El signo '?' marca los dígitos dudosos."
@@ -842,4 +843,3 @@ def run_gui(model_path: Path, csv_path: Path) -> None:
     root = tk.Tk()
     ExpenseReaderGUI(root, model_path, csv_path)
     root.mainloop()
-

@@ -242,7 +242,7 @@ def dominant_color_name(
     brightness = float(np.median(hsv[:, 2]))
     if brightness >= 190:
         return "blanco"
-    if brightness <= 55:
+    if brightness <= 75:
         return "negro"
     return "gris"
 
@@ -252,6 +252,11 @@ def prepare_document_digits(image: np.ndarray) -> tuple[list[np.ndarray], list[s
     color_frame = image if image.ndim == 3 else None
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if color_frame is not None else image
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    if color_frame is not None:
+        # Keep saturated ink that becomes too bright when converted to grayscale.
+        hsv = cv2.cvtColor(color_frame, cv2.COLOR_BGR2HSV)
+        chromatic_ink = cv2.threshold(hsv[:, :, 1], 70, 255, cv2.THRESH_BINARY)[1]
+        binary = cv2.bitwise_or(binary, chromatic_ink)
 
     # Quita las líneas horizontales de tablas que suelen conectar cifras manuscritas.
     width = min(gray.shape[1], max(15, int(gray.shape[1] * 0.42)))
@@ -263,13 +268,15 @@ def prepare_document_digits(image: np.ndarray) -> tuple[list[np.ndarray], list[s
 
     # En recibos, el borde izquierdo del recuadro suele confundirse con el primer dígito.
     # Limita la supresión vertical a la franja exterior izquierda para no borrar trazos.
-    line_height = min(gray.shape[0], max(8, int(gray.shape[0] * 0.70)))
+    line_height = min(gray.shape[0], max(8, int(gray.shape[0] * 0.55)))
     vertical_lines = cv2.morphologyEx(
         binary, cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (1, line_height)),
     )
-    left_edge = max(2, int(gray.shape[1] * 0.04))
-    vertical_lines[:, left_edge:] = 0
+    # Ignore a frame line beside the amount even when a currency label is still
+    # included on the left of the crop. Preserve vertical strokes in the digits.
+    left_region = max(2, int(gray.shape[1] * 0.45))
+    vertical_lines[:, left_region:] = 0
     binary = cv2.subtract(binary, vertical_lines)
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -283,13 +290,69 @@ def prepare_document_digits(image: np.ndarray) -> tuple[list[np.ndarray], list[s
         boxes.append((x, y, box_width, box_height))
     boxes.sort(key=lambda box: box[0])
 
-    # Dos ceros escritos juntos pueden compartir un contorno; se dividen solo
-    # los componentes inusualmente anchos, pues cada dígito suele ser más alto.
+    # Join fragments of one handwritten glyph (often the cap/base of a 1)
+    # while keeping adjacent digits separate.
+    vertical_gap_limit = max(6, int(gray.shape[0] * 0.06))
+    merged = True
+    while merged:
+        merged = False
+        for first in range(len(boxes)):
+            x1, y1, w1, h1 = boxes[first]
+            for second in range(first + 1, len(boxes)):
+                x2, y2, w2, h2 = boxes[second]
+                overlap_x = max(0, min(x1 + w1, x2 + w2) - max(x1, x2))
+                overlap_y = max(0, min(y1 + h1, y2 + h2) - max(y1, y2))
+                gap_y = max(0, max(y1, y2) - min(y1 + h1, y2 + h2))
+                gap_x = max(0, max(x1, x2) - min(x1 + w1, x2 + w2))
+                joins_vertically = (
+                    overlap_x >= 0.20 * min(w1, w2) and gap_y <= vertical_gap_limit
+                )
+                narrow_limit = max(10, int(gray.shape[0] * 0.07))
+                minimum_stroke_height = min(h1, h2)
+                staggered_strokes = (
+                    abs(y1 - y2) >= minimum_stroke_height * 0.20
+                    or abs((y1 + h1) - (y2 + h2)) >= minimum_stroke_height * 0.45
+                    or gap_x >= max(2, min(w1, w2) * 0.40)
+                )
+                joins_separated_strokes = (
+                    w1 <= narrow_limit and w2 <= narrow_limit
+                    and h1 >= gray.shape[0] * 0.40 and h2 >= gray.shape[0] * 0.40
+                    and overlap_y >= 0.65 * min(h1, h2)
+                    and gap_x <= max(4, int(gray.shape[0] * 0.10))
+                    and staggered_strokes
+                )
+                if joins_vertically or joins_separated_strokes:
+                    left, top = min(x1, x2), min(y1, y2)
+                    right, bottom = max(x1 + w1, x2 + w2), max(y1 + h1, y2 + h2)
+                    boxes[first] = (left, top, right - left, bottom - top)
+                    boxes.pop(second)
+                    merged = True
+                    break
+            if merged:
+                break
+
+    # Divide componentes con dos formas separadas por un valle vertical claro;
+    # una regla por anchura sola podía partir dígitos anchos como el 5.
     split_boxes = []
     for x, y, box_width, box_height in boxes:
-        if box_width >= box_height * 1.05 and box_width >= 9:
-            cut = box_width // 2
-            if cut >= 3 and box_width - cut >= 3:
+        if box_width >= box_height * 1.15 and box_width >= 9:
+            projection = np.count_nonzero(
+                binary[y : y + box_height, x : x + box_width], axis=0
+            )
+            search_start, search_end = int(box_width * 0.30), int(box_width * 0.70)
+            if search_end > search_start:
+                cut = search_start + int(np.argmin(projection[search_start:search_end]))
+                left_peak = int(projection[:cut].max(initial=0))
+                right_peak = int(projection[cut + 1 :].max(initial=0))
+                valley = int(projection[cut])
+                clear_valley = (
+                    min(left_peak, right_peak) > 0
+                    and valley <= min(left_peak, right_peak) * 0.45
+                    and min(cut, box_width - cut) >= max(3, int(box_height * 0.25))
+                )
+            else:
+                clear_valley = False
+            if clear_valley:
                 split_boxes.extend(((x, y, cut, box_height),
                                     (x + cut, y, box_width - cut, box_height)))
                 continue
@@ -667,4 +730,3 @@ def select_pdf_digit_region(pdf_path: Path, page_count: int) -> np.ndarray:
 
 if __name__ == "__main__":
     main()
-

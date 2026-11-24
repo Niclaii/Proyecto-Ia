@@ -1,14 +1,20 @@
 # Resultados de validación
 
-Fecha: 2026-11-20
+Fecha: 2026-11-24
 
 ## Dataset MNIST
 
-Se evaluó el checkpoint `models/digits_vit.pth` sobre el conjunto de prueba completo, sin volver a entrenarlo.
+Se evaluó el checkpoint actualizado sobre 10.000 imágenes de prueba.
 
-- Aciertos: 9.820 / 10.000.
-- Exactitud: 98,20 %.
-- Por clase: 0: 99,5 %, 1: 99,3 %, 2: 98,8 %, 3: 98,1 %, 4: 97,0 %, 5: 97,4 %, 6: 98,7 %, 7: 97,8 %, 8: 98,2 %, 9: 96,9 %.
+- Aciertos: 9.764 / 10.000.
+- Exactitud: 97,64 %.
+- Por clase: 0: 99,5 %, 1: 99,5 %, 2: 98,8 %, 3: 97,7 %, 4: 97,6 %, 5: 98,4 %, 6: 98,6 %, 7: 97,8 %, 8: 92,4 %, 9: 95,0 %.
+
+Se midió además con inclinación, perspectiva, cambios de grosor, desenfoque, contraste y trazos parcialmente borrados:
+
+- Aciertos: 9.192 / 10.000.
+- Exactitud con transformaciones de documento: 91,92 %.
+- Es una evaluación sintética de resistencia a transformaciones, no una medida de exactitud sobre documentos reales.
 
 ## Ruta sintética de cámara
 
@@ -23,6 +29,8 @@ Las siete imágenes se construyen con ejemplos reconocidos de MNIST en escenas 6
 | `camara_09_blanco_y_gris_en_fondo_oscuro.png` | 09, blanco/gris | 2 segmentos; correcto |
 | `camara_5142_digitos_pequenos.png` | 5142 en trazos pequeños | 4 segmentos; correcto |
 | `camara_5142_digitos_juntos.png` | 5142 con poca separación | 4 segmentos; correcto |
+
+La misma segmentación de documento también pasó las escenas de tinta negra y de varios colores sobre papel: 0123 negro, 456 rojo/verde/azul y 123 naranja/cian/rosa. En esas escenas, tanto la cantidad de trazos como los dígitos y los colores coincidieron.
 
 ## Lanzador C++
 

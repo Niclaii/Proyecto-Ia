@@ -8,7 +8,7 @@ Prototipo universitario que reconoce importes manuscritos con el Transformer vis
 - **Python + PyTorch:** Transformer, entrenamiento, visión por computador e inferencia.
 - **CUDA:** PyTorch usa la GPU automáticamente si se instala una versión CUDA compatible; el entorno actual tiene PyTorch CPU.
 
-El Transformer conserva los parámetros didácticos del documento: parches de 7 x 7, `d_model=64`, cuatro cabezas, dos bloques Encoder, posiciones sinusoidales y LayerNorm Post-LN. El entrenamiento usa ligeras transformaciones de escritura y valida el modelo antes de guardarlo. El checkpoint actual obtuvo 98,20 % en MNIST de prueba tras incorporar cuatro recortes personales. El modelo clasifica dígitos del 0 al 9. La cámara detecta automáticamente si el fondo es claro u oscuro y estima el color de cada trazo (negro, blanco, gris o colores comunes). El sistema propone el importe, permite corregirlo y guarda fecha, importe y categoría en `gastos.csv`.
+El Transformer conserva los parámetros didácticos del documento: parches de 7 x 7, `d_model=64`, cuatro cabezas, dos bloques Encoder, posiciones sinusoidales y LayerNorm Post-LN. El entrenamiento aplica variaciones de perspectiva, inclinación, grosor de tinta, contraste, desenfoque y pequeñas pérdidas de trazo, y elige el checkpoint con una métrica combinada de dígitos limpios y transformados como documentos. El modelo actual obtuvo 97,64 % en MNIST de prueba y 91,98 % en la prueba sintética con variaciones de documento. La segunda cifra mide robustez a transformaciones, no exactitud en documentos reales. El Transformer clasifica formas en escala de grises; la tinta de color se detecta por separado mediante segmentación HSV y reglas de visión. El sistema propone el importe, permite corregirlo y guarda fecha, importe y categoría en `gastos.csv`.
 
 La cámara muestra video en vivo y captura al pulsar Espacio. Después de capturar, la app muestra por consola el dígito y el color estimado de cada trazo. El recuadro ahora se centra en la escritura y elimina bordes horizontales largos de la pantalla para que no se unan con los trazos. Las imágenes deben mostrar dígitos claros y separados; los colores se estiman visualmente y pueden variar con la iluminación.
 
@@ -22,7 +22,11 @@ py -m venv .venv
 .\.venv\Scripts\python.exe .\python\train.py --epochs 8
 ```
 
-La primera ejecución descarga MNIST y guarda los pesos en `models/digits_vit.pth`. Sin una compilación CUDA de PyTorch, el entrenamiento usa CPU.
+La primera ejecución descarga MNIST y guarda los pesos en `models/digits_vit.pth`. Sin una compilación CUDA de PyTorch, el entrenamiento usa CPU. Para ajustar un checkpoint existente con las variaciones robustas y guardarlo aparte:
+
+```powershell
+.\.venv\Scripts\python.exe .\python\train.py --epochs 3 --init-from .\models\digits_vit.pth --output .\models\digits_vit_document.pth
+```
 
 Si corriges una predicción y la cantidad de cifras coincide con los segmentos detectados, la app puede guardar recortes aislados en `data/custom_digits/` con tu permiso. Para continuar el entrenamiento con esas muestras:
 
@@ -90,7 +94,7 @@ Para probar extracción multipágina, renderizado de escaneos y el flujo C++ com
 .\.venv\Scripts\python.exe .\python\validate_pdf_support.py
 ```
 
-La cámara muestra en vivo si el OCR interpreta lo encuadrado como fecha, hora, precio, otro número o solo texto. También reconoce horas en formato 5:30 y las presenta como hora, para no confundirlas con el número 30 ni tratarlas como un importe. La hora no se guarda en el registro de gastos, que solo tiene campos de fecha e importe. Para guardar una fecha, encuádrela completa; al capturar, pasa al campo de fecha y podrás añadir el importe del gasto. Para un precio, acerca la etiqueta y encuadra el precio con su símbolo o palabra (“Precio”); el OCR ignora las palabras al proponer el número. Pulsa Espacio para capturar o Esc para cancelar:
+La cámara muestra en vivo si el OCR interpreta lo encuadrado como fecha, hora, precio, otro número o solo texto. También reconoce horas en formato `5:30` y las presenta como hora, para no confundirlas con el número `30` ni tratarlas como un importe. La hora no se guarda en el registro de gastos, que solo tiene campos de fecha e importe. Para guardar una fecha, encuádrela completa; al capturar, pasa al campo de fecha y podrás añadir el importe del gasto. Para un precio, acerca la etiqueta y encuadra el precio con su símbolo o palabra (“Precio”); el OCR ignora las palabras al proponer el número. Pulsa Espacio para capturar o Esc para cancelar:
 
 ```powershell
 .\build\Release\expense_reader.exe --camera
@@ -104,4 +108,3 @@ Para reconocer dígitos manuscritos en imágenes, cámara o recortes de PDF esca
 2. Mejorar la segmentación de cifras conectadas y el centrado de cada dígito.
 3. Mejorar la captura en distintas condiciones de luz y cámara.
 4. Comparar el Transformer con una CNN como línea base.
-

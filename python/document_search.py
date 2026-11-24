@@ -396,12 +396,16 @@ def _money_region(
         bottom = min(height, max(bottom, ay1 + round(label_height * 1.0)))
     else:
         pad_x = max(8, round(label_height * 1.2))
-        left = max(0, ax1 + max(2, round(label_height * 0.45)))
-        right = min(width, max(left + 12, ax1 + pad_x * 5))
+        left = max(0, max(ax1, currency_right) + max(2, round(label_height * 0.45)))
+        right = min(width, max(left + 12, left + pad_x * 5))
         if field == "total":
             right = min(width, max(right, ax1 + round(width * 0.22)))
-        top = max(0, ay0 - max(3, round(label_height * 0.6)))
-        bottom = min(height, ay1 + max(10, round(label_height * 2.5)))
+        if field == "total":
+            top = max(0, ay0 - max(3, round(label_height * 1.2)))
+            bottom = min(height, ay1 + max(5, round(label_height * 0.5)))
+        else:
+            top = max(0, ay0 - max(3, round(label_height * 0.6)))
+            bottom = min(height, ay1 + max(10, round(label_height * 2.5)))
 
     if right - left < 10:
         right = min(width, left + 10)
@@ -640,4 +644,3 @@ def extract_camera_numeric_candidates(image: np.ndarray) -> CameraNumberScan:
     """Compatibility helper that returns only numeric OCR candidates."""
     scan = scan_camera_frame(image)
     return CameraNumberScan(scan.candidates, scan.has_alphabetic_text)
-

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from pathlib import Path
 
@@ -15,8 +16,8 @@ from torchvision import datasets, transforms
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-from expense_app import prepare_digits  # noqa: E402
-from train import DigitVisionTransformer  # noqa: E402
+from expense_app import prepare_digits, prepare_document_digits  # noqa: E402
+from train import DigitVisionTransformer, make_document_transform  # noqa: E402
 
 
 FRAME_SIZE = (640, 480)
@@ -58,7 +59,24 @@ def load_and_evaluate(model_path: Path, max_test_samples: int | None):
             offset += len(labels)
 
     accuracy = correct_by_class.sum() / max(1, seen_by_class.sum())
-    return model, device, accuracy, correct_by_class, seen_by_class, examples
+    robust_set = datasets.MNIST(
+        ROOT / "data", train=False, download=False, transform=make_document_transform()
+    )
+    if max_test_samples is not None:
+        robust_set = torch.utils.data.Subset(
+            robust_set, range(min(max_test_samples, len(robust_set)))
+        )
+    random.seed(42026)
+    torch.manual_seed(42026)
+    robust_loader = DataLoader(robust_set, batch_size=512, shuffle=False)
+    robust_correct = robust_seen = 0
+    with torch.inference_mode():
+        for images, labels in robust_loader:
+            predictions = model(images.to(device)).argmax(dim=1).cpu()
+            robust_correct += (predictions == labels).sum().item()
+            robust_seen += labels.numel()
+    robust_accuracy = robust_correct / max(1, robust_seen)
+    return model, device, accuracy, robust_accuracy, correct_by_class, seen_by_class, examples
 
 
 def make_camera_frame(sequence: str, examples: list[tuple[float, np.ndarray] | None],
@@ -122,8 +140,23 @@ def test_camera_scenes(model, device, examples, output_dir: Path) -> bool:
     ]
     passed = True
     for sequence, background, inks, expected_colors, suffix, digit_height, gap in scenes:
-        path = output_dir / f"camara_{sequence}_{suffix}.png"
-        roi = make_camera_frame(sequence, examples, background, inks, path, digit_height, gap)
+        filename = f"camara_{sequence}_{suffix}.png"
+        path = output_dir / filename
+        reference_path = ROOT / "ejemplos" / "pruebas_tiempo_real" / filename
+        if reference_path.is_file():
+            frame = cv2.imread(str(reference_path), cv2.IMREAD_COLOR)
+            if frame is None:
+                raise OSError(f"No se pudo abrir la escena de referencia: {reference_path}")
+            left, top, width, height = ROI
+            roi = frame[top : top + height, left : left + width]
+            if path.resolve() != reference_path.resolve():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not cv2.imwrite(str(path), frame):
+                    raise OSError(f"No se pudo copiar la escena a {path}")
+        else:
+            roi = make_camera_frame(
+                sequence, examples, background, inks, path, digit_height, gap
+            )
         digit_images, colors = prepare_digits(roi, adaptive=True)
         batch = torch.from_numpy(np.stack(digit_images)[:, None, :, :]).to(device)
         with torch.inference_mode():
@@ -135,6 +168,25 @@ def test_camera_scenes(model, device, examples, output_dir: Path) -> bool:
         print(f"ESCENA {sequence}: predicción={predictions}; colores={','.join(colors)}; "
               f"segmentos={len(digit_images)}; {'OK' if scene_ok else 'FALLO'}")
         print(f"  Imagen de prueba: {path.relative_to(ROOT)}")
+        if suffix in {"negro_en_papel", "colores_en_papel", "mas_colores_en_papel"}:
+            document_digits, document_colors = prepare_document_digits(roi)
+            document_batch = torch.from_numpy(
+                np.stack(document_digits)[:, None, :, :]
+            ).to(device)
+            with torch.inference_mode():
+                document_probabilities = model(document_batch).softmax(dim=1).cpu().numpy()
+            document_predictions = "".join(
+                str(int(value)) for value in document_probabilities.argmax(axis=1)
+            )
+            document_ok = (
+                document_predictions == sequence
+                and document_colors == expected_colors
+                and len(document_digits) == len(sequence)
+            )
+            passed &= document_ok
+            print(f"  DOCUMENTO: predicción={document_predictions}; "
+                  f"colores={','.join(document_colors)}; "
+                  f"{'OK' if document_ok else 'FALLO'}")
     return passed
 
 
@@ -148,11 +200,14 @@ def main() -> int:
     args = parser.parse_args()
     if not args.model.is_file():
         parser.error(f"No existe el modelo: {args.model}")
+    if not args.output_dir.is_absolute():
+        args.output_dir = ROOT / args.output_dir
 
-    model, device, accuracy, correct, seen, examples = load_and_evaluate(
+    model, device, accuracy, robust_accuracy, correct, seen, examples = load_and_evaluate(
         args.model, args.max_test_samples
     )
     print(f"MNIST test: exactitud={accuracy:.2%} ({int(correct.sum())}/{int(seen.sum())}); dispositivo={device}")
+    print(f"Prueba con transformaciones de documentos: exactitud={robust_accuracy:.2%}")
     print("Exactitud por dígito: " + ", ".join(
         f"{digit}:{correct[digit] / max(1, seen[digit]):.1%}" for digit in range(10)
     ))

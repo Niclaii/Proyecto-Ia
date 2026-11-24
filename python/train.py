@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import copy
 import math
+import random
 from pathlib import Path
 
 import torch
-from PIL import Image
+from PIL import Image, ImageFilter
 from torch import nn
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset, WeightedRandomSampler
 from torchvision import datasets, transforms
@@ -32,6 +33,58 @@ class CorrectedDigitDataset(Dataset):
         path, label = self.samples[index]
         with Image.open(path) as image:
             return self.transform(image.convert("L")), label
+
+
+class RandomStrokeWidth:
+    """Simulate thinner or thicker pen strokes in document handwriting."""
+
+    def __call__(self, image: Image.Image) -> Image.Image:
+        chance = random.random()
+        if chance < 0.10:
+            return image.filter(ImageFilter.MaxFilter(3))
+        if chance < 0.20:
+            return image.filter(ImageFilter.MinFilter(3))
+        return image
+
+
+def make_document_transform():
+    """Augment digits for skewed scans, camera blur, ink weight, and contrast changes."""
+    return transforms.Compose([
+        transforms.RandomAffine(
+            degrees=12, translate=(0.12, 0.12), scale=(0.80, 1.22), shear=8,
+            interpolation=transforms.InterpolationMode.BILINEAR, fill=0,
+        ),
+        transforms.RandomPerspective(
+            distortion_scale=0.18, p=0.25,
+            interpolation=transforms.InterpolationMode.BILINEAR, fill=0,
+        ),
+        RandomStrokeWidth(),
+        transforms.RandomApply([
+            transforms.ColorJitter(brightness=0.25, contrast=0.30),
+        ], p=0.25),
+        transforms.RandomApply([
+            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
+        ], p=0.18),
+        transforms.ToTensor(),
+        transforms.RandomErasing(
+            p=0.08, scale=(0.003, 0.02), ratio=(0.2, 5.0), value=0.0,
+        ),
+    ])
+
+
+def evaluate_accuracy(model: nn.Module, loader: DataLoader, device: torch.device,
+                      seed: int | None = None) -> float:
+    if seed is not None:
+        torch.manual_seed(seed)
+        random.seed(seed)
+    model.eval()
+    correct = seen = 0
+    with torch.inference_mode():
+        for images, labels in loader:
+            predictions = model(images.to(device)).argmax(dim=1).cpu()
+            correct += (predictions == labels).sum().item()
+            seen += labels.numel()
+    return correct / max(1, seen)
 
 
 class SelfAttention(nn.Module):
@@ -109,24 +162,26 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("models/digits_vit.pth"))
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--custom-dir", type=Path, default=Path("data/custom_digits"))
+    parser.add_argument("--personal-share", type=float, default=0.02,
+                        help="Proporción de muestras personalizadas por época (0 a 0.5)")
     parser.add_argument("--init-from", type=Path,
                         help="Opcional: continúa el entrenamiento desde un checkpoint existente")
+    parser.add_argument("--learning-rate", type=float,
+                        help="Tasa de aprendizaje opcional para ajustar el modelo con cuidado")
     args = parser.parse_args()
 
     if args.epochs < 1:
         parser.error("--epochs debe ser al menos 1")
+    if not 0 < args.personal_share < 0.5:
+        parser.error("--personal-share debe ser mayor que 0 y menor que 0.5")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Entrenando en {device}...")
     torch.manual_seed(42)
+    random.seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
-    training_transform = transforms.Compose([
-        transforms.RandomAffine(
-            degrees=8, translate=(0.08, 0.08), scale=(0.90, 1.10), shear=5, fill=0
-        ),
-        transforms.ToTensor(),
-    ])
+    training_transform = make_document_transform()
     plain_transform = transforms.ToTensor()
     augmented_train = datasets.MNIST(
         args.data_dir, train=True, download=True, transform=training_transform
@@ -144,7 +199,7 @@ def main() -> None:
     personal_set = CorrectedDigitDataset(args.custom_dir, training_transform)
     if len(personal_set):
         combined_train = ConcatDataset([base_subset, personal_set])
-        personal_share = 0.02
+        personal_share = args.personal_share
         personal_weight = len(base_subset) * personal_share / (
             (1.0 - personal_share) * len(personal_set)
         )
@@ -165,27 +220,34 @@ def main() -> None:
     validation_loader = DataLoader(
         Subset(plain_train, validation_indices), batch_size=args.batch_size
     )
+    robust_validation_loader = DataLoader(
+        Subset(augmented_train, validation_indices), batch_size=args.batch_size
+    )
     test_loader = DataLoader(test_set, batch_size=args.batch_size)
+    robust_test_set = datasets.MNIST(
+        args.data_dir, train=False, download=True, transform=training_transform
+    )
+    robust_test_loader = DataLoader(robust_test_set, batch_size=args.batch_size)
 
     model = DigitVisionTransformer().to(device)
     if args.init_from:
         model.load_state_dict(torch.load(args.init_from, map_location=device, weights_only=True))
         print(f"Continuando desde: {args.init_from}")
-    learning_rate = 0.0002 if args.init_from else 0.001
+    learning_rate = args.learning_rate or (0.0002 if args.init_from else 0.001)
+    if learning_rate <= 0:
+        parser.error("--learning-rate debe ser mayor que cero")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     loss_fn = nn.CrossEntropyLoss()
-    best_validation = 0.0
+    best_selection_score = 0.0
     best_state = copy.deepcopy(model.state_dict())
     if args.init_from:
-        model.eval()
-        correct = seen = 0
-        with torch.no_grad():
-            for images, labels in validation_loader:
-                predictions = model(images.to(device)).argmax(dim=1).cpu()
-                correct += (predictions == labels).sum().item()
-                seen += labels.numel()
-        best_validation = correct / seen
-        print(f"Validación inicial: {best_validation:.2%}")
+        initial_clean = evaluate_accuracy(model, validation_loader, device)
+        initial_robust = evaluate_accuracy(model, robust_validation_loader, device, seed=2026)
+        best_selection_score = 0.45 * initial_clean + 0.55 * initial_robust
+        print(
+            f"Validación inicial: MNIST={initial_clean:.2%}; "
+            f"documentos variados={initial_robust:.2%}"
+        )
 
     for epoch in range(args.epochs):
         model.train()
@@ -198,33 +260,30 @@ def main() -> None:
             optimizer.step()
             total_loss += loss.item()
 
-        model.eval()
-        correct = seen = 0
-        with torch.no_grad():
-            for images, labels in validation_loader:
-                predictions = model(images.to(device)).argmax(dim=1).cpu()
-                correct += (predictions == labels).sum().item()
-                seen += labels.numel()
-        validation_accuracy = correct / seen
-        if validation_accuracy > best_validation:
-            best_validation = validation_accuracy
+        validation_accuracy = evaluate_accuracy(model, validation_loader, device)
+        robust_accuracy = evaluate_accuracy(
+            model, robust_validation_loader, device, seed=2026
+        )
+        selection_score = 0.45 * validation_accuracy + 0.55 * robust_accuracy
+        if selection_score > best_selection_score:
+            best_selection_score = selection_score
             best_state = copy.deepcopy(model.state_dict())
         print(
             f"Época {epoch + 1}/{args.epochs} | "
             f"pérdida={total_loss / len(train_loader):.4f} | "
-            f"exactitud validación={validation_accuracy:.2%}"
+            f"validación MNIST={validation_accuracy:.2%} | "
+            f"documentos variados={robust_accuracy:.2%}"
         )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     model.load_state_dict(best_state)
     model = model.cpu().eval()
-    correct = seen = 0
-    with torch.no_grad():
-        for images, labels in test_loader:
-            predictions = model(images).argmax(dim=1)
-            correct += (predictions == labels).sum().item()
-            seen += labels.numel()
-    print(f"Exactitud final en MNIST de prueba: {correct / seen:.2%}")
+    test_accuracy = evaluate_accuracy(model, test_loader, torch.device("cpu"))
+    robust_test_accuracy = evaluate_accuracy(
+        model, robust_test_loader, torch.device("cpu"), seed=42026
+    )
+    print(f"Exactitud MNIST de prueba: {test_accuracy:.2%}")
+    print(f"Exactitud en imágenes variadas de prueba: {robust_test_accuracy:.2%}")
     torch.save(model.state_dict(), args.output)
     print(f"Pesos PyTorch guardados en: {args.output.resolve()}")
 
