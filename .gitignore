@@ -1,0 +1,6 @@
+.venv/
+build*/
+data/
+gastos.csv
+vcpkg_installed/
+__pycache__/
