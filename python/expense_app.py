@@ -23,7 +23,7 @@ for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")
 
 
-def prepare_digits(image: np.ndarray, adaptive: bool = False) -> tuple[list[np.ndarray], list[str]]:
+def _prepare_binary(image: np.ndarray, adaptive: bool) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
     color_frame = image if image.ndim == 3 else None
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if color_frame is not None else image
     if adaptive:
@@ -60,6 +60,11 @@ def prepare_digits(image: np.ndarray, adaptive: bool = False) -> tuple[list[np.n
             cv2.getStructuringElement(cv2.MORPH_RECT, (line_width, 1)),
         )
         binary = cv2.subtract(binary, horizontal_lines)
+    return gray, color_frame, binary
+
+
+def prepare_digits(image: np.ndarray, adaptive: bool = False) -> tuple[list[np.ndarray], list[str]]:
+    gray, color_frame, binary = _prepare_binary(image, adaptive)
 
     # In camera mode, close small breaks in strokes without fusing nearby digits.
     if adaptive:
@@ -150,6 +155,49 @@ def prepare_digits(image: np.ndarray, adaptive: bool = False) -> tuple[list[np.n
     if not digits:
         raise ValueError("No se detectaron dígitos; prueba con tinta oscura y mejor contraste.")
     return digits, colors
+
+
+def detect_decimal_separator(image: np.ndarray, adaptive: bool = True) -> int | None:
+    """Return how many digits precede a clearly visible handwritten decimal dot/comma."""
+    gray, _color_frame, binary = _prepare_binary(image, adaptive)
+    contours, _ = cv2.findContours(binary.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    image_height, image_width = gray.shape[:2]
+    digit_boxes = []
+    small_marks = []
+    min_area = max(2, image_height * image_width // 30000)
+    for contour in contours:
+        x, y, width, height = cv2.boundingRect(contour)
+        area = cv2.contourArea(contour)
+        if area < min_area or x <= 1 or x + width >= image_width - 1:
+            continue
+        if height >= image_height * 0.18:
+            digit_boxes.append((x, y, width, height))
+        elif 2 <= height <= image_height * 0.18 and width <= image_height * 0.18:
+            small_marks.append((x, y, width, height, area))
+    digit_boxes.sort(key=lambda box: box[0])
+    if len(digit_boxes) < 2:
+        return None
+
+    baseline = float(np.median([y + height for _x, y, _width, height in digit_boxes]))
+    typical_height = float(np.median([height for _x, _y, _width, height in digit_boxes]))
+    possible = []
+    for x, y, width, height, area in small_marks:
+        center_x = x + width / 2
+        center_y = y + height / 2
+        if not baseline - typical_height * 0.20 <= center_y <= baseline + typical_height * 0.12:
+            continue
+        for index, (left_x, _left_y, left_w, _left_h) in enumerate(digit_boxes[:-1]):
+            right_x = digit_boxes[index + 1][0]
+            if not left_x + left_w - 2 <= center_x <= right_x + 2:
+                continue
+            digits_right = len(digit_boxes) - index - 1
+            if digits_right not in (1, 2):
+                continue
+            possible.append((area, index + 1))
+            break
+    if not possible:
+        return None
+    return max(possible, key=lambda item: item[0])[1]
 
 
 def dominant_color_name(
@@ -518,6 +566,14 @@ def main() -> None:
             vision_image, model, device, adaptive
         )
         amount = "".join(str(int(digit)) for digit in predictions)
+        decimal_index = detect_decimal_separator(vision_image, adaptive=adaptive)
+        if (
+            decimal_index is not None
+            and 0 < decimal_index < len(amount)
+            and len(amount) - decimal_index <= 2
+        ):
+            amount = amount[:decimal_index] + "." + amount[decimal_index:]
+            print(f"Separador decimal detectado después del dígito {decimal_index}.")
         print(f"Segmentos de dígito detectados: {len(digit_images)}")
         print(f"Dispositivo: {device}")
         print("Dígitos (izquierda a derecha):")

@@ -137,12 +137,14 @@ def _ocr_words(image: np.ndarray) -> list[OCRWord]:
     ok, encoded = cv2.imencode(".png", gray)
     if not ok:
         raise RuntimeError("No pude preparar la imagen para el OCR.")
+    run_options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     run = subprocess.run(
         [executable, "stdin", "stdout", "--psm", "11", "-l", "eng", "tsv"],
         input=encoded.tobytes(),
         capture_output=True,
         timeout=90,
         check=False,
+        **run_options,
     )
     if run.returncode != 0:
         detail = run.stderr.decode("utf-8", errors="replace").strip()
@@ -257,6 +259,7 @@ def _find_anchor(line: dict[str, object], field: str) -> tuple[list[OCRWord], fl
 
 def _parse_dates(text: str) -> list[tuple[str, str]]:
     values = []
+    text = re.sub(r"(?<=\d)\s*([./-])\s*(?=\d)", r"\1", text)
     for match in DATE_RE.finditer(text):
         if match.group(1) is not None:
             day, month, year = (int(match.group(i)) for i in (1, 2, 3))
@@ -275,6 +278,7 @@ def _parse_dates(text: str) -> list[tuple[str, str]]:
 def _parse_values(text: str, field: str) -> list[tuple[str, str]]:
     if field == "fecha":
         return _parse_dates(text)
+    text = re.sub(r"(?<=\d)\s*([.,])\s*(?=\d)", r"\1", text)
     values = []
     for match in AMOUNT_RE.finditer(text):
         normalized = normalize_amount(match.group(0))
@@ -520,7 +524,7 @@ def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
 
     best_by_value: dict[str, CameraNumberCandidate] = {}
     for line in lines:
-        line_text = str(line["text"])
+        line_text = re.sub(r"(?<=\d)\s*([.,])\s*(?=\d)", r"\1", str(line["text"]))
         has_price_cue = bool(PRICE_CUE_RE.search(line_text))
         has_currency = bool(CURRENCY_CUE_RE.search(line_text))
         confidence = float(line["confidence"])

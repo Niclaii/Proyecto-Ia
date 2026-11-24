@@ -15,6 +15,7 @@ import numpy as np
 
 from expense_app import (
     capture_from_camera,
+    detect_decimal_separator,
     load_model,
     predict_image,
     save_expense,
@@ -639,6 +640,8 @@ class ExpenseReaderGUI:
         expense_date: str | None = None,
     ) -> None:
         model, device = self._load_model()
+        decimal_detected = False
+        decimal_index: int | None = None
         try:
             digits, colors, predictions, confidences = predict_image(
                 image, model, device, adaptive, document=document
@@ -654,6 +657,15 @@ class ExpenseReaderGUI:
                 "?" if document and float(confidence) < 0.55 else str(int(digit))
                 for digit, confidence in zip(predictions, confidences)
             )
+            decimal_index = detect_decimal_separator(image, adaptive=adaptive)
+            decimal_detected = (
+                decimal_index is not None
+                and amount.isdigit()
+                and 0 < decimal_index < len(amount)
+                and len(amount) - decimal_index <= 2
+            )
+            if decimal_detected:
+                amount = amount[:decimal_index] + "." + amount[decimal_index:]
             rows = [
                 (str(int(digit)), color, f"{float(confidence):.1%}")
                 for digit, color, confidence in zip(predictions, colors, confidences)
@@ -663,8 +675,12 @@ class ExpenseReaderGUI:
                 detail += " Hay una confianza baja; revisa el importe antes de guardarlo."
                 if document:
                     detail += " El signo '?' marca los dígitos dudosos."
+            if decimal_detected:
+                detail += f" Detecté un separador decimal después del dígito {decimal_index}."
         if document:
-            detail += " Es una propuesta: compara cada dígito con el recorte antes de guardarlo y agrega la coma o el punto decimal manualmente."
+            detail += " Es una propuesta: compara cada dígito con el recorte antes de guardarlo."
+            if not decimal_detected:
+                detail += " Agrega la coma o el punto decimal si corresponde."
         self._show_review(
             amount, source, rows, detail, expense_date=expense_date, preview_image=image
         )

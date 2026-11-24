@@ -82,7 +82,7 @@ Para que la búsqueda por etiqueta funcione en imágenes y PDF escaneados, insta
 winget install --id tesseract-ocr.tesseract --exact
 ```
 
-El programa usa OCR para localizar etiquetas y valores impresos. Para cifras manuscritas usa el modelo de dígitos y muestra el recorte junto a su propuesta. Revisa el número y escribe manualmente la coma o el punto decimal antes de guardar; la confianza del modelo puede ser alta aunque una cifra manuscrita se confunda. La fecha detectada también se puede editar en la ventana de revisión.
+El programa usa OCR para localizar etiquetas y valores impresos, incluidos precios decimales. Para cifras manuscritas usa el modelo de dígitos y también busca visualmente un punto o una coma decimal. Revisa el número y corrígelo si hace falta: la confianza del modelo puede ser alta aunque una cifra manuscrita se confunda. La fecha detectada también se puede editar en la ventana de revisión.
 
 Para probar extracción multipágina, renderizado de escaneos y el flujo C++ completo con un PDF de demostración temporal:
 
