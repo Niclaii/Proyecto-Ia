@@ -19,7 +19,13 @@ from expense_app import (
     predict_image,
     save_expense,
 )
-from document_search import DocumentFieldCandidate, search_image_fields, search_pdf_fields
+from document_search import (
+    CameraNumberCandidate,
+    DocumentFieldCandidate,
+    extract_camera_numeric_candidates,
+    search_image_fields,
+    search_pdf_fields,
+)
 from pdf_support import AmountCandidate, extract_amount_candidates, render_pdf_page
 
 
@@ -323,7 +329,77 @@ class ExpenseReaderGUI:
         image = capture_from_camera()
         if image is None:
             raise CancelAction
+        try:
+            scan = extract_camera_numeric_candidates(image)
+        except RuntimeError as exc:
+            messagebox.showwarning(
+                "OCR no disponible",
+                f"No pude leer la etiqueta con OCR. Intentaré el modo de dígitos manuscritos.\n\n{exc}",
+                parent=self.root,
+            )
+            self._review_vision(image, "Captura de cámara", adaptive=True)
+            return
+
+        if scan.candidates:
+            candidate = self._choose_camera_number(scan.candidates)
+            if candidate.price_cued:
+                detail = "Precio detectado cerca de una etiqueta o símbolo de moneda. Solo se conservó el número; revisa el recorte."
+            else:
+                detail = "OCR conservó solo las cifras de la captura. No vi una etiqueta de precio clara; verifica que sea el precio."
+            self._show_review(
+                candidate.value, "Captura de cámara", [], detail, preview_image=image
+            )
+            return
+
+        if scan.has_alphabetic_text and not messagebox.askyesno(
+            "No encontré un precio numérico",
+            "La cámara reconoció palabras, pero no encontró cifras impresas. ¿Quieres intentar leer la captura como números manuscritos?",
+            parent=self.root,
+        ):
+            return
         self._review_vision(image, "Captura de cámara", adaptive=True)
+
+    def _choose_camera_number(
+        self, candidates: list[CameraNumberCandidate]
+    ) -> CameraNumberCandidate:
+        if len(candidates) == 1:
+            return candidates[0]
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Elige el número del precio")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.geometry("430x330")
+        dialog.configure(bg=BACKGROUND)
+        result: list[CameraNumberCandidate] = []
+        tk.Label(dialog, text="Números detectados", bg=BACKGROUND, fg=TEXT,
+                 font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=18, pady=(16, 4))
+        tk.Label(dialog, text="Las palabras se ignoraron. Selecciona el precio correcto.",
+                 bg=BACKGROUND, fg=MUTED, font=("Segoe UI", 10)).pack(anchor="w", padx=18, pady=(0, 12))
+        listing = tk.Listbox(dialog, font=("Segoe UI", 12), height=8, activestyle="dotbox")
+        listing.pack(fill="both", expand=True, padx=18)
+        for candidate in candidates:
+            description = " · precio probable" if candidate.price_cued else " · otro número"
+            listing.insert("end", f"{candidate.value}{description}")
+        listing.selection_set(0)
+
+        def choose(_event=None) -> None:
+            selection = listing.curselection()
+            if selection:
+                result.append(candidates[selection[0]])
+                dialog.destroy()
+
+        actions = tk.Frame(dialog, bg=BACKGROUND)
+        actions.pack(fill="x", padx=18, pady=14)
+        tk.Button(actions, text="Usar número", command=choose, bg=GREEN, fg=WHITE,
+                  relief="flat", padx=14, pady=8, font=("Segoe UI", 10, "bold")).pack(side="right")
+        tk.Button(actions, text="Cancelar", command=dialog.destroy, bg="#e7ebf0", fg=TEXT,
+                  relief="flat", padx=14, pady=8, font=("Segoe UI", 10)).pack(side="right", padx=(0, 8))
+        listing.bind("<Double-Button-1>", choose)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        self.root.wait_window(dialog)
+        if not result:
+            raise CancelAction
+        return result[0]
 
     def review_pdf(self) -> None:
         path = filedialog.askopenfilename(

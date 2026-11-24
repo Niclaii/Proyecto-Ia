@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 import torch
 
+from document_search import extract_camera_numeric_candidates
 from train import DigitVisionTransformer
 
 for stream in (sys.stdout, sys.stderr):
@@ -290,7 +291,7 @@ def capture_from_camera() -> np.ndarray | None:
             right, bottom = left + roi_width, top + roi_height
             preview = frame.copy()
             cv2.rectangle(preview, (left, top), (right, bottom), (0, 220, 80), 2)
-            cv2.putText(preview, "Acerca la camara; separa los digitos y deja margen", (20, 35),
+            cv2.putText(preview, "Acerca la etiqueta y centra el precio en el recuadro", (20, 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 80), 2)
             cv2.putText(preview, "ESPACIO: capturar   ESC: cancelar", (20, 65),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 80), 2)
@@ -388,6 +389,33 @@ def main() -> None:
         if vision_image is None:
             print("Captura cancelada.")
             return
+        try:
+            camera_scan = extract_camera_numeric_candidates(vision_image)
+        except RuntimeError as exc:
+            print(f"OCR no disponible; usaré el modo de dígitos manuscritos: {exc}")
+        else:
+            if camera_scan.candidates:
+                print("Números detectados (se ignoraron las palabras):")
+                for index, candidate in enumerate(camera_scan.candidates, start=1):
+                    cue = "precio probable" if candidate.price_cued else "otro número"
+                    print(f"  [{index}] {candidate.value} ({cue})")
+                selected_index = 0
+                if len(camera_scan.candidates) > 1:
+                    selection = input("Elige el precio (Enter para [1]): ").strip()
+                    try:
+                        selected_index = int(selection) - 1 if selection else 0
+                        if selected_index < 0 or selected_index >= len(camera_scan.candidates):
+                            raise ValueError
+                    except ValueError as exc:
+                        raise ValueError("Selección numérica no válida.") from exc
+                amount = camera_scan.candidates[selected_index].value
+            elif camera_scan.has_alphabetic_text:
+                use_handwriting = input(
+                    "Solo detecté palabras, sin números impresos. ¿Intento leer números manuscritos? (s/n): "
+                ).strip().lower()
+                if use_handwriting not in {"s", "si", "sí"}:
+                    print("No se propuso ningún importe.")
+                    return
     elif args.image.suffix.lower() == ".pdf":
         from pdf_support import extract_amount_candidates
 
@@ -421,7 +449,7 @@ def main() -> None:
             raise ValueError(f"No se pudo abrir la imagen: {args.image}")
 
     confidences: np.ndarray | None = None
-    if vision_image is not None:
+    if vision_image is not None and amount is None:
         model, device = load_model(args.model)
         digit_images, colors, predictions, confidences = predict_image(
             vision_image, model, device, adaptive

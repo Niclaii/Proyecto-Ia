@@ -90,13 +90,13 @@ Para probar extracción multipágina, renderizado de escaneos y el flujo C++ com
 .\.venv\Scripts\python.exe .\python\validate_pdf_support.py
 ```
 
-Para abrir la vista en vivo de la cámara, encuadra todos los dígitos dentro del rectángulo, sepáralos un poco y deja margen respecto al borde. Pulsa Espacio para capturar o Esc para cancelar:
+Para leer una etiqueta con la cámara, acerca el producto y encuadra el precio junto con su símbolo o palabra (“Precio”) dentro del rectángulo. El OCR ignora las palabras al proponer el número; si hay varios números, podrás elegir. Si solo encuentra texto, pregunta antes de pasar al modo de dígitos manuscritos. Pulsa Espacio para capturar o Esc para cancelar:
 
 ```powershell
 .\build\Release\expense_reader.exe --camera
 ```
 
-Para analizar imágenes, cámara o recortes de PDF escaneados necesitas un modelo entrenado en `models/digits_vit.pth`; los PDF con texto seleccionable no dependen del modelo. El ejecutable C++ inicia el backend Python con el entorno virtual del proyecto.
+Para reconocer dígitos manuscritos en imágenes, cámara o recortes de PDF escaneados necesitas un modelo entrenado en `models/digits_vit.pth`. Los números impresos que Tesseract pueda leer se obtienen por OCR sin usar ese modelo; los PDF con texto seleccionable tampoco dependen de él. El ejecutable C++ inicia el backend Python con el entorno virtual del proyecto.
 
 ## Siguientes mejoras
 

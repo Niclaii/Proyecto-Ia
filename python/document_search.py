@@ -35,6 +35,13 @@ FIELD_MATCH_WORDS = {
 DATE_RE = re.compile(
     r"(?<!\d)(?:(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})|(\d{4})[./-](\d{1,2})[./-](\d{1,2}))(?!\d)"
 )
+NUMERIC_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?![A-Za-z0-9])"
+)
+PRICE_CUE_RE = re.compile(
+    r"(?i)\b(?:precio|price|unitario|unit|importe|monto|total|cost|oferta|sale)\b"
+)
+CURRENCY_CUE_RE = re.compile(r"(?i)(?:\bS\s*/|\bPEN\b|\bUSD\b|US\$|[$€£])")
 OCR_CORRECTIONS = {
     "torat": "total",
     "toral": "total",
@@ -72,6 +79,22 @@ class DocumentFieldCandidate:
     confidence: float
     score: float
     bounds: tuple[int, int, int, int] | None = None
+
+
+@dataclass(frozen=True)
+class CameraNumberCandidate:
+    """A numeric-only OCR result from the camera guide area."""
+
+    value: str
+    confidence: float
+    score: float
+    price_cued: bool
+
+
+@dataclass(frozen=True)
+class CameraNumberScan:
+    candidates: list[CameraNumberCandidate]
+    has_alphabetic_text: bool
 
 
 def _find_tesseract() -> str:
@@ -467,4 +490,57 @@ def search_pdf_fields(pdf_path: Path, target_field: str) -> tuple[int, list[Docu
             candidates.extend(page_candidates)
     candidates.sort(key=lambda candidate: (-candidate.score, candidate.page_number))
     return page_count, candidates
+
+
+def extract_camera_numeric_candidates(image: np.ndarray) -> CameraNumberScan:
+    """Read numeric tokens only, ranking amounts next to price/currency cues first."""
+    words = _ocr_words(image)
+    lines = _group_lines(words)
+    has_alphabetic_text = any(
+        re.search(r"[A-Za-z]{2,}", word.text) and word.confidence >= 0.35
+        for word in words
+    )
+    price_fields = _find_field_candidates(
+        words, "precio", 1, image.shape[1], image.shape[0]
+    )
+    labeled_prices = {
+        candidate.value for candidate in price_fields if candidate.value is not None
+    }
+
+    best_by_value: dict[str, CameraNumberCandidate] = {}
+    for line in lines:
+        line_text = str(line["text"])
+        has_price_cue = bool(PRICE_CUE_RE.search(line_text))
+        has_currency = bool(CURRENCY_CUE_RE.search(line_text))
+        confidence = float(line["confidence"])
+        for match in NUMERIC_TOKEN_RE.finditer(line_text):
+            value = normalize_amount(match.group(0))
+            if value is None:
+                continue
+            digits = sum(char.isdigit() for char in match.group(0))
+            has_decimal = bool(re.search(r"[.,]\d{1,2}$", match.group(0)))
+            price_cued = has_price_cue or has_currency or value in labeled_prices
+            score = (
+                (35 if has_price_cue else 0)
+                + (35 if has_currency else 0)
+                + (45 if value in labeled_prices else 0)
+                + (14 if has_decimal else 0)
+                + min(digits, 8) * 1.5
+                + confidence * 10
+            )
+            candidate = CameraNumberCandidate(value, confidence, score, price_cued)
+            previous = best_by_value.get(value)
+            if previous is None or candidate.score > previous.score:
+                best_by_value[value] = candidate
+
+    for value in labeled_prices:
+        if value not in best_by_value:
+            best_by_value[value] = CameraNumberCandidate(value, 0.0, 100.0, True)
+
+    return CameraNumberScan(
+        sorted(
+            best_by_value.values(), key=lambda item: (-item.score, -item.confidence, item.value)
+        ),
+        has_alphabetic_text,
+    )
 
