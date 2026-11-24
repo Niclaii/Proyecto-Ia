@@ -371,7 +371,7 @@ def capture_from_camera() -> np.ndarray | None:
                 error = recognition_state["error"]
             preview = frame.copy()
             cv2.rectangle(preview, (left, top), (right, bottom), (0, 220, 80), 2)
-            cv2.putText(preview, "Muestra una fecha o precio dentro del recuadro", (20, 35),
+            cv2.putText(preview, "Muestra fecha, hora o precio dentro del recuadro", (20, 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 80), 2)
             cv2.putText(preview, "ESPACIO: capturar   ESC: cancelar", (20, 65),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 80), 2)
@@ -505,6 +505,10 @@ def main() -> None:
                     amount = price_candidates[selected_index].value
                 else:
                     amount = input("Escribe el importe de este gasto: ").strip()
+            elif camera_scan.kind == "hora" and camera_scan.value:
+                print(f"Hora detectada: {camera_scan.display.removeprefix('HORA: ')} ({camera_scan.value}).")
+                print("La hora se reconoció correctamente; vuelve al menú para continuar.")
+                return
             elif camera_scan.candidates:
                 print("Números detectados (se ignoraron las palabras):")
                 for index, candidate in enumerate(camera_scan.candidates, start=1):

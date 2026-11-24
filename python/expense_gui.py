@@ -355,6 +355,15 @@ class ExpenseReaderGUI:
             )
             return
 
+        if scan.kind == "hora" and scan.value:
+            messagebox.showinfo(
+                "Hora detectada",
+                f"Reconocí la hora {scan.display.removeprefix('HORA: ')}.\n\n"
+                "La aplicación registra fecha e importe, así que no creó un gasto con la hora como si fuera un precio.",
+                parent=self.root,
+            )
+            return
+
         if scan.candidates:
             candidate = self._choose_camera_number(scan.candidates)
             if candidate.price_cued:

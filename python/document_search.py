@@ -35,6 +35,11 @@ FIELD_MATCH_WORDS = {
 DATE_RE = re.compile(
     r"(?<!\d)(?:(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})|(\d{4})[./-](\d{1,2})[./-](\d{1,2}))(?!\d)"
 )
+TIME_RE = re.compile(
+    r"(?<!\d)(?P<hour>\d{1,2})\s*:\s*(?P<minute>\d{2})"
+    r"(?:\s*(?P<period>a\.?\s*m\.?|p\.?\s*m\.?))?(?!\d)",
+    re.IGNORECASE,
+)
 NUMERIC_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?![A-Za-z0-9])"
 )
@@ -43,6 +48,7 @@ PRICE_CUE_RE = re.compile(
 )
 CURRENCY_CUE_RE = re.compile(r"(?i)(?:\bS\s*/|\bPEN\b|\bUSD\b|US\$|[$€£])")
 DATE_CUE_RE = re.compile(r"(?i)\b(?:fecha|date|emision|issued)\b")
+TIME_CUE_RE = re.compile(r"(?i)\b(?:hora|time)\b")
 OCR_CORRECTIONS = {
     "torat": "total",
     "toral": "total",
@@ -127,7 +133,7 @@ def _find_tesseract() -> str:
     )
 
 
-def _ocr_words(image: np.ndarray) -> list[OCRWord]:
+def _ocr_words(image: np.ndarray, *, numeric_only: bool = False) -> list[OCRWord]:
     executable = _find_tesseract()
     height, width = image.shape[:2]
     scale = max(1.0, min(3.0, 1800.0 / max(height, width)))
@@ -137,9 +143,13 @@ def _ocr_words(image: np.ndarray) -> list[OCRWord]:
     ok, encoded = cv2.imencode(".png", gray)
     if not ok:
         raise RuntimeError("No pude preparar la imagen para el OCR.")
+    command = [executable, "stdin", "stdout", "--psm", "7" if numeric_only else "11", "-l", "eng"]
+    if numeric_only:
+        command.extend(["-c", "tessedit_char_whitelist=0123456789:"])
+    command.append("tsv")
     run_options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     run = subprocess.run(
-        [executable, "stdin", "stdout", "--psm", "11", "-l", "eng", "tsv"],
+        command,
         input=encoded.tobytes(),
         capture_output=True,
         timeout=90,
@@ -272,6 +282,26 @@ def _parse_dates(text: str) -> list[tuple[str, str]]:
         except ValueError:
             continue
         values.append((value, match.group(0)))
+    return values
+
+
+def _parse_times(text: str) -> list[tuple[str, str]]:
+    """Return valid clock times as 24-hour HH:MM plus their OCR text."""
+    text = re.sub(r"(?<=\d)\s*:\s*(?=\d)", ":", text)
+    values = []
+    for match in TIME_RE.finditer(text):
+        hour = int(match.group("hour"))
+        minute = int(match.group("minute"))
+        period = re.sub(r"[^ap]", "", (match.group("period") or "").lower())
+        if minute > 59:
+            continue
+        if period:
+            if hour < 1 or hour > 12:
+                continue
+            hour = hour % 12 + (12 if period == "p" else 0)
+        elif hour > 23:
+            continue
+        values.append((f"{hour:02d}:{minute:02d}", match.group(0).strip()))
     return values
 
 
@@ -508,7 +538,7 @@ def search_pdf_fields(pdf_path: Path, target_field: str) -> tuple[int, list[Docu
 
 
 def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
-    """Identify a date, a likely price, or numeric-only text in one camera frame."""
+    """Identify a date, clock time, likely price, or numeric-only text in one frame."""
     words = _ocr_words(image)
     lines = _group_lines(words)
     has_alphabetic_text = any(
@@ -556,12 +586,25 @@ def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
         best_by_value.values(), key=lambda item: (-item.score, -item.confidence, item.value)
     )
     dates = []
+    times = []
     for line in lines:
         line_text = str(line["text"])
         date_cued = bool(DATE_CUE_RE.search(line_text))
         for value, raw in _parse_dates(line_text):
             score = (50 if date_cued else 0) + float(line["confidence"])
             dates.append((score, value, raw, float(line["confidence"])))
+        time_cued = bool(TIME_CUE_RE.search(line_text))
+        for value, raw in _parse_times(line_text):
+            score = (50 if time_cued else 0) + float(line["confidence"])
+            times.append((score, value, raw, float(line["confidence"])))
+    # A letters-and-digits OCR pass can turn a handwritten 5 into 0 in a time.
+    # Re-read only frames where it found a colon, constraining the alphabet to clock characters.
+    if any(":" in str(line["text"]) for line in lines):
+        numeric_lines = _group_lines(_ocr_words(image, numeric_only=True))
+        for line in numeric_lines:
+            for value, raw in _parse_times(str(line["text"])):
+                confidence = float(line["confidence"])
+                times.append((confidence, value, raw, confidence))
     if dates:
         _score, value, raw, confidence = max(dates, key=lambda item: item[0])
         return CameraFrameScan(
@@ -572,6 +615,11 @@ def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
         return CameraFrameScan(
             "precio", candidate.value, f"PRECIO: {candidate.value}",
             candidate.confidence, candidates, has_alphabetic_text,
+        )
+    if times:
+        _score, value, raw, confidence = max(times, key=lambda item: item[0])
+        return CameraFrameScan(
+            "hora", value, f"HORA: {raw}", confidence, candidates, has_alphabetic_text
         )
     if candidates:
         candidate = candidates[0]

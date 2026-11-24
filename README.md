@@ -90,7 +90,7 @@ Para probar extracción multipágina, renderizado de escaneos y el flujo C++ com
 .\.venv\Scripts\python.exe .\python\validate_pdf_support.py
 ```
 
-La cámara muestra en vivo si el OCR interpreta lo encuadrado como fecha, precio, otro número o solo texto. Para guardar una fecha, encuádrela completa; al capturar, pasa al campo de fecha y podrás añadir el importe del gasto. Para un precio, acerca la etiqueta y encuadra el precio con su símbolo o palabra (“Precio”); el OCR ignora las palabras al proponer el número. Pulsa Espacio para capturar o Esc para cancelar:
+La cámara muestra en vivo si el OCR interpreta lo encuadrado como fecha, hora, precio, otro número o solo texto. También reconoce horas en formato 5:30 y las presenta como hora, para no confundirlas con el número 30 ni tratarlas como un importe. La hora no se guarda en el registro de gastos, que solo tiene campos de fecha e importe. Para guardar una fecha, encuádrela completa; al capturar, pasa al campo de fecha y podrás añadir el importe del gasto. Para un precio, acerca la etiqueta y encuadra el precio con su símbolo o palabra (“Precio”); el OCR ignora las palabras al proponer el número. Pulsa Espacio para capturar o Esc para cancelar:
 
 ```powershell
 .\build\Release\expense_reader.exe --camera
