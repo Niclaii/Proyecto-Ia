@@ -1,110 +1,128 @@
-# Registro de gastos escritos a mano
+# Registro de gastos con lectura de cifras manuscritas
 
-Prototipo universitario que reconoce importes manuscritos con el Transformer visual del PDF y los registra localmente tras confirmarlos.
+Este prototipo universitario ayuda a registrar gastos a partir de una imagen, un PDF o la cámara. La aplicación propone una lectura y deja que el usuario la revise antes de guardarla.
 
-## Tecnologías
+## Qué permite hacer
 
-- **C++:** ejecutable de entrada y gestión del proceso.
-- **Python + PyTorch:** Transformer, entrenamiento, visión por computador e inferencia.
-- **CUDA:** PyTorch usa la GPU automáticamente si se instala una versión CUDA compatible; el entorno actual tiene PyTorch CPU.
+- Reconocer dígitos manuscritos del 0 al 9 en imágenes y documentos.
+- Buscar datos por categoría, como total, importe, precio o fecha.
+- Mostrar en la cámara el texto detectado y capturar una zona para analizar sus cifras.
+- Revisar y corregir el resultado antes de guardarlo en `gastos.csv`.
+- Consultar los gastos guardados desde el historial.
 
-El Transformer conserva los parámetros didácticos del documento: parches de 7 x 7, `d_model=64`, cuatro cabezas, dos bloques Encoder, posiciones sinusoidales y LayerNorm Post-LN. El entrenamiento aplica variaciones de perspectiva, inclinación, grosor de tinta, contraste, desenfoque y pequeñas pérdidas de trazo, y elige el checkpoint con una métrica combinada de dígitos limpios y transformados como documentos. El modelo actual obtuvo 97,64 % en MNIST de prueba y 91,98 % en la prueba sintética con variaciones de documento. La segunda cifra mide robustez a transformaciones, no exactitud en documentos reales. El Transformer clasifica formas en escala de grises; la tinta de color se detecta por separado mediante segmentación HSV y reglas de visión. El sistema propone el importe, permite corregirlo y guarda fecha, importe y categoría en `gastos.csv`.
+El color de la tinta se estima con reglas de OpenCV y HSV. El modelo de PyTorch se encarga de clasificar las formas de los dígitos; no fue entrenado para reconocer colores.
 
-La cámara muestra video en vivo y captura al pulsar Espacio. Después de capturar, la app muestra por consola el dígito y el color estimado de cada trazo. El recuadro ahora se centra en la escritura y elimina bordes horizontales largos de la pantalla para que no se unan con los trazos. Las imágenes deben mostrar dígitos claros y separados; los colores se estiman visualmente y pueden variar con la iluminación.
+## Cómo está organizado
 
-## Preparar el entorno Python
+- `cpp/src/main.cpp`: ejecutable de entrada que inicia el programa Python.
+- `python/expense_gui.py`: menú, selección de archivos y revisión de resultados.
+- `python/expense_app.py`: procesamiento de imágenes, cámara, predicción y guardado.
+- `python/document_search.py`: búsqueda de etiquetas y números con OCR.
+- `python/pdf_support.py`: lectura de texto y renderizado de páginas PDF.
+- `python/train.py`: arquitectura y entrenamiento del Vision Transformer.
+- `models/digits_vit.pth`: pesos del modelo que usa la aplicación.
+- `ejemplos/`: imágenes para probar el programa.
 
-En PowerShell, desde la carpeta del proyecto:
+## Requisitos
+
+Para compilar y ejecutar en Windows se necesita:
+
+- Python 3.10 o posterior.
+- CMake 3.20 o posterior.
+- Visual Studio 2022 con la carga de trabajo **Desarrollo para el escritorio con C++**.
+- Una cámara web si se quiere probar el modo de cámara.
+- Tesseract OCR para buscar etiquetas en imágenes y PDF escaneados. Los PDF con texto seleccionable no necesitan OCR para extraer sus importes.
+
+## Preparar y ejecutar
+
+Abre PowerShell en la carpeta del proyecto y prepara el entorno de Python:
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe .\python\train.py --epochs 8
 ```
 
-La primera ejecución descarga MNIST y guarda los pesos en `models/digits_vit.pth`. Sin una compilación CUDA de PyTorch, el entrenamiento usa CPU. Para ajustar un checkpoint existente con las variaciones robustas y guardarlo aparte:
+Compila el lanzador C++:
 
 ```powershell
-.\.venv\Scripts\python.exe .\python\train.py --epochs 3 --init-from .\models\digits_vit.pth --output .\models\digits_vit_document.pth
+cmake -S .\cpp -B .\build
+cmake --build .\build --config Release
 ```
 
-Si corriges una predicción y la cantidad de cifras coincide con los segmentos detectados, la app puede guardar recortes aislados en `data/custom_digits/` con tu permiso. Para continuar el entrenamiento con esas muestras:
-
-```powershell
-.\.venv\Scripts\python.exe .\python\train.py --epochs 5 --init-from .\models\digits_vit.pth --output .\models\digits_vit_personal.pth
-```
-
-Revisa la validación antes de reemplazar el modelo activo por el nuevo checkpoint.
-
-## Compilar y ejecutar el programa C++
-
-Requiere Visual Studio con **Desarrollo para el escritorio con C++** y CMake.
-
-```powershell
-.\.venv\Scripts\cmake.exe -S .\cpp -B .\build
-.\.venv\Scripts\cmake.exe --build .\build --config Release
-.\build\Release\expense_reader.exe .\ejemplos\importe_demo.png
-```
-
-Al ejecutar `expense_reader.exe` sin argumentos se abre el menú gráfico. También puedes abrirlo con `--gui`. Desde el menú eliges PDF, imagen, cámara o historial; al cerrar una revisión, vuelves al menú principal.
+Abre el menú principal:
 
 ```powershell
 .\build\Release\expense_reader.exe
 ```
 
-Las imágenes de ejemplo contienen `12345` y `54`; puedes usarlas para ejecutar el primer flujo sin depender de una cámara. La segunda permite comprobar la separación de dos dígitos:
+Desde el menú puedes elegir una imagen, un PDF, la cámara o el historial. Al terminar una revisión, la aplicación vuelve al menú.
+
+También puedes abrir una imagen directamente:
 
 ```powershell
+.\build\Release\expense_reader.exe .\ejemplos\importe_demo.png
 .\build\Release\expense_reader.exe .\ejemplos\importe_54_demo.png
 ```
 
-También puedes elegir dónde guardar el CSV:
-
-```powershell
-.\build\Release\expense_reader.exe .\ejemplos\importe.jpg .\datos\gastos.csv
-```
-
-Para evaluar el checkpoint sobre MNIST y generar/probar escenas sintéticas con la misma segmentación que usa la cámara:
-
-```powershell
-.\.venv\Scripts\python.exe .\python\validate_pipeline.py
-```
-
-Las imágenes generadas y las instrucciones para mostrarlas frente a la cámara están en `ejemplos/pruebas_tiempo_real/`.
-
-## Revisar un documento PDF
-
-Al abrir una imagen o un PDF, elige qué dato quieres buscar: total, monto/importe, precio unitario, fecha o dígitos sueltos. El programa busca primero la etiqueta elegida y solo lee el valor asociado o recorta su zona; no mezcla todos los números de la página. Si hay varios resultados, podrás seleccionar uno. Los importes manuscritos siguen siendo una propuesta del modelo: la ventana muestra el recorte para que compares y corrijas el valor antes de guardarlo. Si no encuentra la etiqueta, puedes marcar la zona a mano.
+Para abrir un PDF:
 
 ```powershell
 .\build\Release\expense_reader.exe "C:\ruta\a\tu_documento.pdf"
 ```
 
-Para que la búsqueda por etiqueta funcione en imágenes y PDF escaneados, instala Tesseract OCR una vez en Windows:
-
-```powershell
-winget install --id tesseract-ocr.tesseract --exact
-```
-
-El programa usa OCR para localizar etiquetas y valores impresos, incluidos precios decimales. Para cifras manuscritas usa el modelo de dígitos y también busca visualmente un punto o una coma decimal. Revisa el número y corrígelo si hace falta: la confianza del modelo puede ser alta aunque una cifra manuscrita se confunda. La fecha detectada también se puede editar en la ventana de revisión.
-
-Para probar extracción multipágina, renderizado de escaneos y el flujo C++ completo con un PDF de demostración temporal:
-
-```powershell
-.\.venv\Scripts\python.exe .\python\validate_pdf_support.py
-```
-
-La cámara muestra en vivo si el OCR interpreta lo encuadrado como fecha, hora, precio, otro número o solo texto. También reconoce horas en formato `5:30` y las presenta como hora, para no confundirlas con el número `30` ni tratarlas como un importe. La hora no se guarda en el registro de gastos, que solo tiene campos de fecha e importe. Para guardar una fecha, encuádrela completa; al capturar, pasa al campo de fecha y podrás añadir el importe del gasto. Para un precio, acerca la etiqueta y encuadra el precio con su símbolo o palabra (“Precio”); el OCR ignora las palabras al proponer el número. Pulsa Espacio para capturar o Esc para cancelar:
+Para usar la cámara directamente:
 
 ```powershell
 .\build\Release\expense_reader.exe --camera
 ```
 
-Para reconocer dígitos manuscritos en imágenes, cámara o recortes de PDF escaneados necesitas un modelo entrenado en `models/digits_vit.pth`. Los números impresos que Tesseract pueda leer se obtienen por OCR sin usar ese modelo; los PDF con texto seleccionable tampoco dependen de él. El ejecutable C++ inicia el backend Python con el entorno virtual del proyecto.
+## Buscar datos en documentos
 
-## Siguientes mejoras
+Al revisar una imagen o un PDF, selecciona el dato que quieres encontrar: total, importe, precio unitario, fecha o dígitos. El programa intenta localizar el campo elegido y muestra el recorte para que puedas comprobarlo. Si no encuentra el campo, puedes seleccionar la zona manualmente.
 
-1. Reunir ejemplos escritos por varias personas y medir exactitud y correcciones.
-2. Mejorar la segmentación de cifras conectadas y el centrado de cada dígito.
-3. Mejorar la captura en distintas condiciones de luz y cámara.
-4. Comparar el Transformer con una CNN como línea base.
+Para reconocer etiquetas impresas en imágenes y PDF escaneados, instala Tesseract OCR en Windows:
+
+```powershell
+winget install --id tesseract-ocr.tesseract --exact
+```
+
+En la cámara, el OCR analiza el recuadro mientras se muestra la imagen. Al capturar, el modelo procesa los dígitos manuscritos. Las horas como `5:30` se presentan como horas y no como importes. La cámara necesita buena iluminación y los dígitos deben verse completos.
+
+## Entrenar el modelo
+
+El archivo `models/digits_vit.pth` ya está incluido, así que no hace falta entrenar para ejecutar la aplicación.
+
+Para entrenar un modelo nuevo desde MNIST, ejecuta:
+
+```powershell
+.\.venv\Scripts\python.exe .\python\train.py --epochs 8 --output .\models\digits_vit_nuevo.pth
+```
+
+El conjunto MNIST se descarga si todavía no está en `data/`. Para continuar desde los pesos incluidos y guardar el resultado por separado:
+
+```powershell
+.\.venv\Scripts\python.exe .\python\train.py --epochs 3 --init-from .\models\digits_vit.pth --output .\models\digits_vit_ajustado.pth
+```
+
+El modelo usa un Vision Transformer pequeño: divide cada dígito en parches de 7 × 7, procesa esos parches con dos bloques Encoder y clasifica el resultado en una de diez clases. El entrenamiento agrega inclinación, cambios de escala, desenfoque y variaciones de grosor y contraste para acercarse a imágenes tomadas con cámara.
+
+## Pruebas
+
+Para evaluar el modelo y probar la segmentación con las imágenes de ejemplo:
+
+```powershell
+.\.venv\Scripts\python.exe .\python\validate_pipeline.py
+```
+
+Después de compilar, puedes probar la lectura de PDF y el flujo de guardado:
+
+```powershell
+.\.venv\Scripts\python.exe .\python\validate_pdf_support.py
+```
+
+En la evaluación de referencia, el modelo obtuvo 97,64 % en las 10.000 imágenes de prueba de MNIST y 91,98 % con transformaciones sintéticas que imitan algunos defectos de documentos. Esta segunda cifra no representa la exactitud en boletas reales. Las escenas de prueba y sus resultados están en `ejemplos/pruebas_tiempo_real/`.
+
+## Alcance
+
+La lectura es una propuesta: una cifra manuscrita puede confundirse, aunque el programa indique confianza alta. Revisa el valor y corrígelo antes de guardarlo. La precisión con documentos reales depende de la letra, la calidad de la imagen, el tamaño de los números y la iluminación.
+
