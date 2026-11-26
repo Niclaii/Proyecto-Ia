@@ -1,4 +1,4 @@
-# Registro de gastos con lectura de cifras manuscritas
+# Optimización del Reconocimiento de Números Manuscritos Offline
 
 Este prototipo universitario ayuda a registrar gastos a partir de una imagen, un PDF o la cámara. La aplicación propone una lectura y deja que el usuario la revise antes de guardarla.
 
