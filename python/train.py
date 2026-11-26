@@ -16,7 +16,7 @@ from torchvision import datasets, transforms
 
 
 class CorrectedDigitDataset(Dataset):
-    """Optional 28x28 crops labeled by their 0-9 parent directory."""
+    """Carga recortes etiquetados en carpetas del 0 al 9."""
 
     def __init__(self, root: Path, transform) -> None:
         self.transform = transform
@@ -36,7 +36,7 @@ class CorrectedDigitDataset(Dataset):
 
 
 class RandomStrokeWidth:
-    """Simulate thinner or thicker pen strokes in document handwriting."""
+    """Simula trazos de bolígrafo más finos o gruesos."""
 
     def __call__(self, image: Image.Image) -> Image.Image:
         chance = random.random()
@@ -48,7 +48,7 @@ class RandomStrokeWidth:
 
 
 def make_document_transform():
-    """Augment digits for skewed scans, camera blur, ink weight, and contrast changes."""
+    """Varía inclinación, desenfoque, grosor y contraste de los dígitos."""
     return transforms.Compose([
         transforms.RandomAffine(
             degrees=12, translate=(0.12, 0.12), scale=(0.80, 1.22), shear=8,

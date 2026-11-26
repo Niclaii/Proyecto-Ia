@@ -8,9 +8,7 @@ import tempfile
 from pathlib import Path
 
 import cv2
-import numpy as np
 import pymupdf
-import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 

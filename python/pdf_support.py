@@ -88,7 +88,7 @@ def extract_amount_candidates(pdf_path: Path, limit: int = 12) -> tuple[int, lis
                 elif line_matches and CURRENCY_RE.search(line):
                     contexts.append((line, 20))
                 elif line_score > 0:
-                    # Some PDFs put the amount on the line immediately below its label.
+                    # Algunos PDF ponen el importe debajo de su etiqueta.
                     for next_line in lines[line_index + 1 : line_index + 3]:
                         if cue_score(next_line) >= 35:
                             break

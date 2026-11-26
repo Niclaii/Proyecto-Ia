@@ -35,7 +35,7 @@ std::filesystem::path findProjectRoot(const std::filesystem::path& executable) {
     }
     return {};
 }
-}  // namespace
+}
 
 int wmain(int argc, wchar_t* argv[]) {
     const bool useGui = argc == 1 || (argc >= 2 && std::wstring(argv[1]) == L"--gui");

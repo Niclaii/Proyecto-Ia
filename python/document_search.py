@@ -90,7 +90,7 @@ class DocumentFieldCandidate:
 
 @dataclass(frozen=True)
 class CameraNumberCandidate:
-    """A numeric-only OCR result from the camera guide area."""
+    """Resultado OCR con solo cifras del recuadro de cámara."""
 
     value: str
     confidence: float
@@ -286,7 +286,7 @@ def _parse_dates(text: str) -> list[tuple[str, str]]:
 
 
 def _parse_times(text: str) -> list[tuple[str, str]]:
-    """Return valid clock times as 24-hour HH:MM plus their OCR text."""
+    """Devuelve horas válidas en formato HH:MM y el texto OCR."""
     text = re.sub(r"(?<=\d)\s*:\s*(?=\d)", ":", text)
     values = []
     for match in TIME_RE.finditer(text):
@@ -392,7 +392,7 @@ def _money_region(
         top = max(0, min(word.y0 for word in right_words))
         right = min(width, max(word.x1 for word in right_words) + max(8, round(max_word_height * 1.30)))
         bottom = min(height, max(word.y1 for word in right_words) + max(5, round(max_word_height * 0.30)))
-        # OCR can detect only the upper strokes of handwritten digits.
+        # El OCR puede detectar solo la parte superior del dígito manuscrito.
         bottom = min(height, max(bottom, ay1 + round(label_height * 1.0)))
     else:
         pad_x = max(8, round(label_height * 1.2))
@@ -530,8 +530,7 @@ def search_pdf_fields(pdf_path: Path, target_field: str) -> tuple[int, list[Docu
                             ocr_words, field, page_index + 1, image.shape[1], image.shape[0]
                         )
                     )
-                # A text-layer label with no value has point-based bounds, while
-                # the rendered page uses pixels. Keep the OCR result's pixel ROI.
+                # Conserva el recorte OCR en píxeles al renderizar la página.
                 page_candidates = [
                     item for item in page_candidates
                     if item.field not in fields_to_ocr or item.value is not None
@@ -542,7 +541,7 @@ def search_pdf_fields(pdf_path: Path, target_field: str) -> tuple[int, list[Docu
 
 
 def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
-    """Identify a date, clock time, likely price, or numeric-only text in one frame."""
+    """Clasifica el recuadro como fecha, hora, precio o número."""
     words = _ocr_words(image)
     lines = _group_lines(words)
     has_alphabetic_text = any(
@@ -601,8 +600,7 @@ def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
         for value, raw in _parse_times(line_text):
             score = (50 if time_cued else 0) + float(line["confidence"])
             times.append((score, value, raw, float(line["confidence"])))
-    # A letters-and-digits OCR pass can turn a handwritten 5 into 0 in a time.
-    # Re-read only frames where it found a colon, constraining the alphabet to clock characters.
+    # Relee como hora cuando encuentra dos puntos para evitar confundir 5 con 0.
     if any(":" in str(line["text"]) for line in lines):
         numeric_lines = _group_lines(_ocr_words(image, numeric_only=True))
         for line in numeric_lines:
@@ -641,6 +639,6 @@ def scan_camera_frame(image: np.ndarray) -> CameraFrameScan:
 
 
 def extract_camera_numeric_candidates(image: np.ndarray) -> CameraNumberScan:
-    """Compatibility helper that returns only numeric OCR candidates."""
+    """Devuelve solo los candidatos numéricos del OCR."""
     scan = scan_camera_frame(image)
     return CameraNumberScan(scan.candidates, scan.has_alphabetic_text)

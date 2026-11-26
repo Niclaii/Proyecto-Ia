@@ -29,8 +29,7 @@ def _prepare_binary(image: np.ndarray, adaptive: bool) -> tuple[np.ndarray, np.n
     if adaptive:
         hsv_frame = cv2.cvtColor(color_frame, cv2.COLOR_BGR2HSV) if color_frame is not None else None
         if float(np.median(gray)) < 127:
-            # Value keeps bright saturated colors visible, even blue strokes whose
-            # grayscale intensity is naturally low.
+            # El canal de brillo conserva trazos de color oscuro.
             foreground = hsv_frame[:, :, 2] if hsv_frame is not None else gray
             otsu_threshold, _ = cv2.threshold(
                 foreground, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
@@ -44,7 +43,7 @@ def _prepare_binary(image: np.ndarray, adaptive: bool) -> tuple[np.ndarray, np.n
                 block_size, 9,
             )
             if hsv_frame is not None:
-                # Saturated ink can have nearly the same brightness as white paper.
+                # La saturación conserva la tinta de color sobre papel claro.
                 chromatic_ink = cv2.threshold(
                     hsv_frame[:, :, 1], 45, 255, cv2.THRESH_BINARY
                 )[1]
@@ -66,7 +65,7 @@ def _prepare_binary(image: np.ndarray, adaptive: bool) -> tuple[np.ndarray, np.n
 def prepare_digits(image: np.ndarray, adaptive: bool = False) -> tuple[list[np.ndarray], list[str]]:
     gray, color_frame, binary = _prepare_binary(image, adaptive)
 
-    # In camera mode, close small breaks in strokes without fusing nearby digits.
+    # Cierra cortes pequeños sin unir dígitos cercanos.
     if adaptive:
         kernel_width = max(3, min(7, int(min(gray.shape) * 0.02) | 1))
         kernel_height = max(5, min(9, int(min(gray.shape) * 0.03) | 1))
@@ -86,8 +85,7 @@ def prepare_digits(image: np.ndarray, adaptive: bool = False) -> tuple[list[np.n
         if box[2] * box[3] < min_area:
             continue
         if adaptive:
-            # Reject screen edges and small interface icons; digits should occupy
-            # a substantial part of the camera guide box.
+            # Descarta bordes e iconos pequeños fuera de los dígitos.
             if height < gray.shape[0] * 0.18:
                 continue
             if x <= 1 or x + width >= gray.shape[1] - 1:
@@ -158,7 +156,7 @@ def prepare_digits(image: np.ndarray, adaptive: bool = False) -> tuple[list[np.n
 
 
 def detect_decimal_separator(image: np.ndarray, adaptive: bool = True) -> int | None:
-    """Return how many digits precede a clearly visible handwritten decimal dot/comma."""
+    """Detecta el separador decimal y devuelve cuántos dígitos lo preceden."""
     gray, _color_frame, binary = _prepare_binary(image, adaptive)
     contours, _ = cv2.findContours(binary.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     image_height, image_width = gray.shape[:2]
@@ -253,7 +251,7 @@ def prepare_document_digits(image: np.ndarray) -> tuple[list[np.ndarray], list[s
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if color_frame is not None else image
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
     if color_frame is not None:
-        # Keep saturated ink that becomes too bright when converted to grayscale.
+        # Conserva tinta de color que se pierde en escala de grises.
         hsv = cv2.cvtColor(color_frame, cv2.COLOR_BGR2HSV)
         chromatic_ink = cv2.threshold(hsv[:, :, 1], 70, 255, cv2.THRESH_BINARY)[1]
         binary = cv2.bitwise_or(binary, chromatic_ink)
@@ -266,15 +264,13 @@ def prepare_document_digits(image: np.ndarray) -> tuple[list[np.ndarray], list[s
     )
     binary = cv2.subtract(binary, horizontal_lines)
 
-    # En recibos, el borde izquierdo del recuadro suele confundirse con el primer dígito.
-    # Limita la supresión vertical a la franja exterior izquierda para no borrar trazos.
+    # Limita la supresión del borde para conservar trazos verticales.
     line_height = min(gray.shape[0], max(8, int(gray.shape[0] * 0.55)))
     vertical_lines = cv2.morphologyEx(
         binary, cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (1, line_height)),
     )
-    # Ignore a frame line beside the amount even when a currency label is still
-    # included on the left of the crop. Preserve vertical strokes in the digits.
+    # Quita el borde del recorte sin borrar trazos de los dígitos.
     left_region = max(2, int(gray.shape[1] * 0.45))
     vertical_lines[:, left_region:] = 0
     binary = cv2.subtract(binary, vertical_lines)
@@ -290,8 +286,7 @@ def prepare_document_digits(image: np.ndarray) -> tuple[list[np.ndarray], list[s
         boxes.append((x, y, box_width, box_height))
     boxes.sort(key=lambda box: box[0])
 
-    # Join fragments of one handwritten glyph (often the cap/base of a 1)
-    # while keeping adjacent digits separate.
+    # Une fragmentos del mismo dígito sin juntar cifras vecinas.
     vertical_gap_limit = max(6, int(gray.shape[0] * 0.06))
     merged = True
     while merged:
@@ -331,8 +326,7 @@ def prepare_document_digits(image: np.ndarray) -> tuple[list[np.ndarray], list[s
             if merged:
                 break
 
-    # Divide componentes con dos formas separadas por un valle vertical claro;
-    # una regla por anchura sola podía partir dígitos anchos como el 5.
+    # Divide solo cuando hay un valle claro entre dos dígitos.
     split_boxes = []
     for x, y, box_width, box_height in boxes:
         if box_width >= box_height * 1.15 and box_width >= 9:
